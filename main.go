@@ -4,63 +4,174 @@ import (
 	"flag"
 	"github.com/elazarl/goproxy"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 	"net/http"
-	"regexp"
+	"net/url"
+	"strings"
 	"sync"
+	"time"
 )
 
-type WebProxy struct {
-	server   *goproxy.ProxyHttpServer
-	Limiters sync.Map
+type Balancer struct {
+	server  *goproxy.ProxyHttpServer
+	proxies []*Proxy
+}
+
+type Proxy struct {
+	Name       string
+	Url        *url.URL
+	Limiters   sync.Map
+	HttpClient *http.Client
 }
 
 func LogRequestMiddleware(h goproxy.FuncReqHandler) goproxy.ReqHandler {
 	return goproxy.FuncReqHandler(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 
 		logrus.WithFields(logrus.Fields{
-			"host": string(r.Host),
-		}).Trace(r.Method)
+			"host": r.Host,
+		}).Trace(strings.ToUpper(r.URL.Scheme) + " " + r.Method)
 
 		return h(r, ctx)
 	})
 }
 
-func New() *WebProxy {
+//TODO: expiration ?
+func (p *Proxy) getLimiter(host string) *rate.Limiter {
 
-	proxy := new(WebProxy)
+	limiter, ok := p.Limiters.Load(host)
+	if !ok {
 
-	proxy.server = goproxy.NewProxyHttpServer()
+		every, _ := time.ParseDuration("100ms")
+		limiter = rate.NewLimiter(rate.Every(every), 0)
+		p.Limiters.Store(host, limiter)
 
-	proxy.server.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile("^.*$"))).
-		HandleConnect(goproxy.AlwaysMitm)
+		logrus.WithFields(logrus.Fields{
+			"host": host,
+		}).Trace("New limiter")
+	}
 
-	proxy.server.OnRequest().Do(
-		LogRequestMiddleware(
-			func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-
-				logrus.Warn("TEST")
-				return r, nil
-			},
-		),
-	)
-
-	return proxy
+	return limiter.(*rate.Limiter)
 }
 
-func (proxy *WebProxy) Run() {
+func simplifyHost(host string) string {
+	if strings.HasPrefix(host, "www.") {
+		return host[4:]
+	}
 
-	logrus.Infof("Started web proxy at address %s", "localhost:5050")
+	return host
+}
 
-	addr := flag.String("addr", ":5050", "proxy listen address")
+func (b *Balancer) chooseProxy(host string) *Proxy {
+
+	_ = simplifyHost(host)
+
+	return b.proxies[0]
+}
+
+func New() *Balancer {
+
+	balancer := new(Balancer)
+
+	balancer.server = goproxy.NewProxyHttpServer()
+
+	balancer.server.OnRequest().HandleConnect(goproxy.AlwaysMitm)
+
+	balancer.server.OnRequest().Do(LogRequestMiddleware(
+		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+
+			p := balancer.chooseProxy(r.Host)
+
+			logrus.WithFields(logrus.Fields{
+				"proxy": p.Name,
+			}).Trace("Routing request")
+
+			proxyReq := preprocessRequest(cloneRequest(r))
+			resp, err := p.HttpClient.Do(proxyReq)
+
+			//TODO: handle err
+			if err != nil {
+				panic(err)
+			}
+
+			return nil, resp
+		}))
+	return balancer
+}
+
+func (b *Balancer) Run() {
+
+	addr := flag.String("addr", "localhost:5050", "listen address")
 	flag.Parse()
-	//proxy.Verbose = true
 
-	go logrus.Fatal(http.ListenAndServe(*addr, proxy.server))
+	//b.Verbose = true
+	logrus.WithFields(logrus.Fields{
+		"addr": *addr,
+	}).Info("Listening")
+
+	go logrus.Fatal(http.ListenAndServe(*addr, b.server))
+}
+
+func preprocessRequest(r *http.Request) *http.Request {
+	return r
+}
+
+func cloneRequest(r *http.Request) *http.Request {
+
+	proxyReq := &http.Request{
+		Method:     r.Method,
+		URL:        r.URL,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     r.Header,
+		Body:       r.Body,
+		Host:       r.URL.Host,
+	}
+
+	return proxyReq
+}
+
+func NewProxy(name, stringUrl string) (*Proxy, error) {
+
+	var parsedUrl *url.URL
+	var err error
+	if stringUrl != "" {
+		parsedUrl, err = url.Parse(stringUrl)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		parsedUrl = nil
+	}
+
+	var httpClient *http.Client
+	//TODO: setup extra headers & qargs here
+	if parsedUrl == nil {
+		httpClient = &http.Client{}
+	} else {
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyURL(parsedUrl),
+			},
+		}
+	}
+
+	return &Proxy{
+		Name:       name,
+		Url:        parsedUrl,
+		HttpClient: httpClient,
+	}, nil
 }
 
 func main() {
 	logrus.SetLevel(logrus.TraceLevel)
 
-	proxy := New()
-	proxy.Run()
+	balancer := New()
+
+	p0, _ := NewProxy("p0", "http://localhost:3128")
+	//p0, _ := NewProxy("p0", "")
+
+	balancer.proxies = []*Proxy{p0}
+
+	balancer.Run()
 }
