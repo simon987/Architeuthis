@@ -42,7 +42,10 @@ func applyConfig(proxy *Proxy) {
 	for host, conf := range config.Hosts {
 		duration, err := time.ParseDuration(conf.Every)
 		handleErr(err)
-		proxy.Limiters.Store(host, rate.NewLimiter(rate.Every(duration), conf.Burst))
+		proxy.Limiters[host] = &ExpiringLimiter{
+			rate.NewLimiter(rate.Every(duration), conf.Burst),
+			time.Now(),
+		}
 	}
 }
 

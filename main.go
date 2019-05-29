@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -19,10 +18,15 @@ type Balancer struct {
 	proxies []*Proxy
 }
 
+type ExpiringLimiter struct {
+	Limiter  *rate.Limiter
+	LastRead time.Time
+}
+
 type Proxy struct {
 	Name        string
 	Url         *url.URL
-	Limiters    sync.Map
+	Limiters    map[string]*ExpiringLimiter
 	HttpClient  *http.Client
 	Connections int
 }
@@ -41,33 +45,33 @@ func (a ByConnectionCount) Less(i, j int) bool {
 	return a[i].Connections < a[j].Connections
 }
 
-func LogRequestMiddleware(h goproxy.FuncReqHandler) goproxy.ReqHandler {
-	return goproxy.FuncReqHandler(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-
-		logrus.WithFields(logrus.Fields{
-			"host": r.Host,
-		}).Trace(strings.ToUpper(r.URL.Scheme) + " " + r.Method)
-
-		return h(r, ctx)
-	})
-}
-
-//TODO: expiration ?
 func (p *Proxy) getLimiter(host string) *rate.Limiter {
 
-	limiter, ok := p.Limiters.Load(host)
+	expLimit, ok := p.Limiters[host]
 	if !ok {
-
-		every, _ := time.ParseDuration("1ms")
-		limiter = rate.NewLimiter(rate.Every(every), 1)
-		p.Limiters.Store(host, limiter)
-
-		logrus.WithFields(logrus.Fields{
-			"host": host,
-		}).Trace("New limiter")
+		newExpiringLimiter := p.makeNewLimiter(host)
+		return newExpiringLimiter.Limiter
 	}
 
-	return limiter.(*rate.Limiter)
+	expLimit.LastRead = time.Now()
+	return expLimit.Limiter
+}
+
+func (p *Proxy) makeNewLimiter(host string) *ExpiringLimiter {
+	every := time.Millisecond //todo load default from conf
+
+	newExpiringLimiter := &ExpiringLimiter{
+		LastRead: time.Now(),
+		Limiter:  rate.NewLimiter(rate.Every(every), 1),
+	}
+
+	p.Limiters[host] = newExpiringLimiter
+
+	logrus.WithFields(logrus.Fields{
+		"host": host,
+	}).Trace("New limiter")
+
+	return newExpiringLimiter
 }
 
 func simplifyHost(host string) string {
@@ -92,7 +96,7 @@ func New() *Balancer {
 
 	balancer.server.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 
-	balancer.server.OnRequest().Do(LogRequestMiddleware(
+	balancer.server.OnRequest().DoFunc(
 		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 
 			p := balancer.chooseProxy()
@@ -110,7 +114,7 @@ func New() *Balancer {
 			}
 
 			return nil, resp
-		}))
+		})
 	return balancer
 }
 
@@ -234,6 +238,7 @@ func NewProxy(name, stringUrl string) (*Proxy, error) {
 		Name:       name,
 		Url:        parsedUrl,
 		HttpClient: httpClient,
+		Limiters:   make(map[string]*ExpiringLimiter),
 	}, nil
 }
 
@@ -256,5 +261,6 @@ func main() {
 		}).Info("Proxy")
 	}
 
+	balancer.setupGarbageCollector()
 	balancer.Run()
 }

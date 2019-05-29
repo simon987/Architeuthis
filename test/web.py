@@ -17,6 +17,7 @@ def e500():
 
 @app.route("/404")
 def e404():
+    time.sleep(0.5)
     return Response(status=404)
 
 
