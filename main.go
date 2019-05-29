@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"github.com/elazarl/goproxy"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 	"net/http"
@@ -77,12 +78,9 @@ func simplifyHost(host string) string {
 	return host
 }
 
-func (b *Balancer) chooseProxy(host string) *Proxy {
-
-	_ = simplifyHost(host)
+func (b *Balancer) chooseProxy() *Proxy {
 
 	sort.Sort(ByConnectionCount(b.proxies))
-
 	return b.proxies[0]
 }
 
@@ -97,40 +95,80 @@ func New() *Balancer {
 	balancer.server.OnRequest().Do(LogRequestMiddleware(
 		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 
-			sHost := simplifyHost(r.Host)
-			p := balancer.chooseProxy(sHost)
+			p := balancer.chooseProxy()
 
-			p.Connections += 1
 			logrus.WithFields(logrus.Fields{
 				"proxy":      p.Name,
 				"connexions": p.Connections,
 			}).Trace("Routing request")
 
-			limiter := p.getLimiter(sHost)
-			reservation := limiter.Reserve()
-			if !reservation.OK() {
-				logrus.Warn("Could not reserve")
-			}
-			delay := reservation.Delay()
-			if delay > 0 {
-				logrus.WithFields(logrus.Fields{
-					"time": delay,
-				}).Trace("Sleeping")
-				time.Sleep(delay)
-			}
+			resp, err := p.processRequest(r)
 
-			proxyReq := preprocessRequest(cloneRequest(r))
-			resp, err := p.HttpClient.Do(proxyReq)
-			p.Connections -= 1
-
-			//TODO: handle err
 			if err != nil {
-				panic(err)
+				logrus.WithError(err).Trace("Could not complete request")
+				return nil, goproxy.NewResponse(r, "text/plain", 500, err.Error())
 			}
 
 			return nil, resp
 		}))
 	return balancer
+}
+
+func (p *Proxy) processRequest(r *http.Request) (*http.Response, error) {
+
+	p.Connections += 1
+	defer func() {
+		p.Connections -= 1
+	}()
+	retries := 1
+	const maxRetries = 5
+
+	p.waitRateLimit(r)
+	proxyReq := preprocessRequest(cloneRequest(r))
+
+	for {
+
+		if retries > maxRetries {
+			return nil, errors.Errorf("giving up after %d retries", maxRetries)
+		}
+
+		resp, err := p.HttpClient.Do(proxyReq)
+
+		if err != nil {
+			if isPermanentError(err) {
+				return nil, err
+			}
+
+			wait := waitTime(retries)
+
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"wait": wait,
+			}).Trace("Temporary error during request")
+			time.Sleep(wait)
+
+			retries += 1
+			continue
+		}
+
+		if isHttpSuccessCode(resp.StatusCode) {
+
+			return resp, nil
+		} else if shouldRetryHttpCode(resp.StatusCode) {
+
+			wait := waitTime(retries)
+
+			logrus.WithFields(logrus.Fields{
+				"wait":   wait,
+				"status": resp.StatusCode,
+			}).Trace("HTTP error during request")
+
+			time.Sleep(wait)
+			retries += 1
+			continue
+		} else {
+			return nil, errors.Errorf("HTTP error: %d", resp.StatusCode)
+		}
+	}
 }
 
 func (b *Balancer) Run() {
@@ -143,7 +181,8 @@ func (b *Balancer) Run() {
 		"addr": *addr,
 	}).Info("Listening")
 
-	go logrus.Fatal(http.ListenAndServe(*addr, b.server))
+	err := http.ListenAndServe(*addr, b.server)
+	logrus.Fatal(err)
 }
 
 func preprocessRequest(r *http.Request) *http.Request {
