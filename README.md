@@ -1,6 +1,7 @@
-# Architeuthis ?
+# Architeuthis 🦑
 
 [![CodeFactor](https://www.codefactor.io/repository/github/simon987/architeuthis/badge)](https://www.codefactor.io/repository/github/simon987/architeuthis)
+![GitHub](https://img.shields.io/github/license/simon987/Architeuthis.svg)
 
 *NOTE: this is very WIP* 
 
@@ -39,8 +40,7 @@ and error handling. Built for automated web scraping.
       "every": "2s",
       "burst": 1,
       "headers": {"User-Agent":  "mybot_v0.1"}
-    },
-    ...
+    }
   }
 }
 ```
