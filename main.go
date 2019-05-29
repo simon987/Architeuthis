@@ -7,6 +7,7 @@ import (
 	"golang.org/x/time/rate"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,10 +19,25 @@ type Balancer struct {
 }
 
 type Proxy struct {
-	Name       string
-	Url        *url.URL
-	Limiters   sync.Map
-	HttpClient *http.Client
+	Name        string
+	Url         *url.URL
+	Limiters    sync.Map
+	HttpClient  *http.Client
+	Connections int
+}
+
+type ByConnectionCount []*Proxy
+
+func (a ByConnectionCount) Len() int {
+	return len(a)
+}
+
+func (a ByConnectionCount) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+
+func (a ByConnectionCount) Less(i, j int) bool {
+	return a[i].Connections < a[j].Connections
 }
 
 func LogRequestMiddleware(h goproxy.FuncReqHandler) goproxy.ReqHandler {
@@ -41,8 +57,8 @@ func (p *Proxy) getLimiter(host string) *rate.Limiter {
 	limiter, ok := p.Limiters.Load(host)
 	if !ok {
 
-		every, _ := time.ParseDuration("100ms")
-		limiter = rate.NewLimiter(rate.Every(every), 0)
+		every, _ := time.ParseDuration("1ms")
+		limiter = rate.NewLimiter(rate.Every(every), 1)
 		p.Limiters.Store(host, limiter)
 
 		logrus.WithFields(logrus.Fields{
@@ -65,6 +81,8 @@ func (b *Balancer) chooseProxy(host string) *Proxy {
 
 	_ = simplifyHost(host)
 
+	sort.Sort(ByConnectionCount(b.proxies))
+
 	return b.proxies[0]
 }
 
@@ -79,14 +97,31 @@ func New() *Balancer {
 	balancer.server.OnRequest().Do(LogRequestMiddleware(
 		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 
-			p := balancer.chooseProxy(r.Host)
+			sHost := simplifyHost(r.Host)
+			p := balancer.chooseProxy(sHost)
 
+			p.Connections += 1
 			logrus.WithFields(logrus.Fields{
-				"proxy": p.Name,
+				"proxy":      p.Name,
+				"connexions": p.Connections,
 			}).Trace("Routing request")
+
+			limiter := p.getLimiter(sHost)
+			reservation := limiter.Reserve()
+			if !reservation.OK() {
+				logrus.Warn("Could not reserve")
+			}
+			delay := reservation.Delay()
+			if delay > 0 {
+				logrus.WithFields(logrus.Fields{
+					"time": delay,
+				}).Trace("Sleeping")
+				time.Sleep(delay)
+			}
 
 			proxyReq := preprocessRequest(cloneRequest(r))
 			resp, err := p.HttpClient.Do(proxyReq)
+			p.Connections -= 1
 
 			//TODO: handle err
 			if err != nil {
@@ -166,12 +201,21 @@ func NewProxy(name, stringUrl string) (*Proxy, error) {
 func main() {
 	logrus.SetLevel(logrus.TraceLevel)
 
+	loadConfig()
 	balancer := New()
 
-	p0, _ := NewProxy("p0", "http://localhost:3128")
-	//p0, _ := NewProxy("p0", "")
+	for _, proxyConf := range config.Proxies {
+		proxy, err := NewProxy(proxyConf.Name, proxyConf.Url)
+		handleErr(err)
+		balancer.proxies = append(balancer.proxies, proxy)
 
-	balancer.proxies = []*Proxy{p0}
+		applyConfig(proxy)
+
+		logrus.WithFields(logrus.Fields{
+			"name": proxy.Name,
+			"url":  proxy.Url,
+		}).Info("Proxy")
+	}
 
 	balancer.Run()
 }

@@ -1,0 +1,25 @@
+{
+  "addr": "localhost:5050",
+  "proxies": [
+    {
+      "name": "p0",
+      "url": ""
+    },
+    {
+      "name": "p1",
+      "url": "http://localhost:3128"
+    }
+  ],
+  "hosts": {
+    "*": {
+      "every": "10s",
+      "burst": 1,
+      "headers": {}
+    },
+    "reddit.com": {
+      "every": "100s",
+      "burst": 1,
+      "headers": {}
+    }
+  }
+}
