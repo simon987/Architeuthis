@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/elazarl/goproxy"
 	"github.com/pkg/errors"
+	"github.com/ryanuber/go-glob"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 	"net/http"
@@ -58,11 +59,9 @@ func (p *Proxy) getLimiter(host string) *rate.Limiter {
 
 func (p *Proxy) makeNewLimiter(host string) *ExpiringLimiter {
 
-	defaultConf := config.Hosts["*"]
-
 	newExpiringLimiter := &ExpiringLimiter{
 		LastRead: time.Now(),
-		Limiter:  rate.NewLimiter(rate.Every(defaultConf.Every), defaultConf.Burst),
+		Limiter:  rate.NewLimiter(rate.Every(config.DefaultConfig.Every), config.DefaultConfig.Burst),
 	}
 
 	p.Limiters[host] = newExpiringLimiter
@@ -75,16 +74,13 @@ func (p *Proxy) makeNewLimiter(host string) *ExpiringLimiter {
 }
 
 func simplifyHost(host string) string {
-	if strings.HasPrefix(host, "www.") {
-		host = host[4:]
-	}
 
 	col := strings.LastIndex(host, ":")
 	if col > 0 {
 		host = host[:col]
 	}
 
-	return host
+	return "." + host
 }
 
 func (b *Balancer) chooseProxy() *Proxy {
@@ -126,18 +122,16 @@ func New() *Balancer {
 
 func applyHeaders(r *http.Request) *http.Request {
 
-	if conf, ok := config.Hosts["*"]; ok {
-		for k, v := range conf.Headers {
-			r.Header.Set(k, v)
+	sHost := simplifyHost(r.Host)
+
+	for _, conf := range config.Hosts {
+		if glob.Glob(conf.Host, sHost) {
+			for k, v := range conf.Headers {
+				r.Header.Set(k, v)
+			}
 		}
 	}
 
-	sHost := simplifyHost(r.Host)
-	if conf, ok := config.Hosts[sHost]; ok {
-		for k, v := range conf.Headers {
-			r.Header.Set(k, v)
-		}
-	}
 	return r
 }
 

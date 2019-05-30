@@ -37,7 +37,7 @@ func (b *Balancer) cleanAllExpiredLimits() {
 
 func cleanExpiredLimits(proxy *Proxy) {
 
-	const ttl = time.Second
+	const ttl = time.Hour
 
 	limits := make(map[string]*ExpiringLimiter, 0)
 	now := time.Now()
@@ -60,6 +60,11 @@ func cleanExpiredLimits(proxy *Proxy) {
 func shouldPruneLimiter(host string) bool {
 
 	// Don't remove hosts that are coming from the config
-	_, ok := config.Hosts[host]
-	return !ok
+	for _, conf := range config.Hosts {
+		if conf.Host == host {
+			return false
+		}
+	}
+
+	return true
 }

@@ -34,18 +34,25 @@ and error handling. Built for automated web scraping.
       "url": "http://p1.exemple.com:8080"
     }
   ],
-  "hosts": {
-    "*": {
-      "every": "750ms",
-      "burst": 5,
-      "headers": {}
+  "hosts": [
+    {
+      "host": "*",
+      "every": "500ms",
+      "burst": 25,
+      "headers": {
+        "User-Agent": "Some user agent",
+        "X-Test": "Will be overwritten"
+      }
     },
-    "reddit.com": {
+    {
+      "host": "*.reddit.com",
       "every": "2s",
       "burst": 2,
-      "headers": {"User-Agent":  "mybot_v0.1"}
+      "headers": {
+        "X-Test": "Will overwrite default"
+      }
     }
-  }
+  ]
 }
 ```
 

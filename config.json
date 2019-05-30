@@ -14,22 +14,22 @@
       "url": ""
     }
   ],
-  "hosts": {
-    "*": {
+  "hosts": [
+    {
+      "host": "*",
       "every": "500s",
       "burst": 25,
       "headers": {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Cache-Control": "max-age=0",
         "Connection": "keep-alive",
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0"
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0",
+        "X-Test": "default"
       }
     },
-    "reddit.com": {
-      "every": "2s",
-      "burst": 2,
-      "headers": {
-      }
+    {
+      "host": "*.reddit.com",
+      "every": "2s"
     }
-  }
+  ]
 }

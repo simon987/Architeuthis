@@ -11,6 +11,7 @@ import (
 )
 
 type HostConfig struct {
+	Host     string            `json:"host"`
 	EveryStr string            `json:"every"`
 	Burst    int               `json:"burst"`
 	Headers  map[string]string `json:"headers"`
@@ -23,15 +24,16 @@ type ProxyConfig struct {
 }
 
 var config struct {
-	Addr       string                 `json:"addr"`
-	TimeoutStr string                 `json:"timeout"`
-	WaitStr    string                 `json:"wait"`
-	Multiplier float64                `json:"multiplier"`
-	Retries    int                    `json:"retries"`
-	Hosts      map[string]*HostConfig `json:"hosts"`
-	Proxies    []ProxyConfig          `json:"proxies"`
-	Wait       int64
-	Timeout    time.Duration
+	Addr          string        `json:"addr"`
+	TimeoutStr    string        `json:"timeout"`
+	WaitStr       string        `json:"wait"`
+	Multiplier    float64       `json:"multiplier"`
+	Retries       int           `json:"retries"`
+	Hosts         []*HostConfig `json:"hosts"`
+	Proxies       []ProxyConfig `json:"proxies"`
+	Wait          int64
+	Timeout       time.Duration
+	DefaultConfig *HostConfig
 }
 
 func loadConfig() {
@@ -52,38 +54,44 @@ func loadConfig() {
 	config.Wait = int64(wait)
 
 	for _, conf := range config.Hosts {
-		conf.Every, err = time.ParseDuration(conf.EveryStr)
-		handleErr(err)
+		if conf.EveryStr == "" {
+			conf.Every = config.DefaultConfig.Every
+		} else {
+			conf.Every, err = time.ParseDuration(conf.EveryStr)
+			handleErr(err)
+		}
+
+		if config.DefaultConfig != nil && conf.Burst == 0 {
+			conf.Burst = config.DefaultConfig.Burst
+		}
 	}
 }
 
 func validateConfig() {
 
-	hasDefaultHost := false
+	for _, conf := range config.Hosts {
 
-	for host, conf := range config.Hosts {
-
-		if host == "*" {
-			hasDefaultHost = true
+		if conf.Host == "*" {
+			config.DefaultConfig = conf
 		}
 
 		for k := range conf.Headers {
 			if strings.ToLower(k) == "accept-encoding" {
 				panic(fmt.Sprintf("headers config for '%s':"+
-					" Do not set the Accept-Encoding header, it breaks goproxy", host))
+					" Do not set the Accept-Encoding header, it breaks goproxy", conf.Host))
 			}
 		}
 	}
 
-	if !hasDefaultHost {
+	if config.DefaultConfig == nil {
 		panic("config.json: You must specify a default host ('*')")
 	}
 }
 
 func applyConfig(proxy *Proxy) {
 
-	for host, conf := range config.Hosts {
-		proxy.Limiters[host] = &ExpiringLimiter{
+	for _, conf := range config.Hosts {
+		proxy.Limiters[conf.Host] = &ExpiringLimiter{
 			rate.NewLimiter(rate.Every(conf.Every), conf.Burst),
 			time.Now(),
 		}
