@@ -8,28 +8,52 @@
     {
       "name": "p0",
       "url": ""
-    },
-    {
-      "name": "p1",
-      "url": ""
     }
   ],
   "hosts": [
     {
       "host": "*",
-      "every": "500s",
+      "every": "500ms",
       "burst": 25,
       "headers": {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Cache-Control": "max-age=0",
         "Connection": "keep-alive",
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0",
-        "X-Test": "default"
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0"
       }
     },
     {
       "host": "*.reddit.com",
-      "every": "2s"
+      "every": "2s",
+      "burst": 1
+    },
+    {
+      "host": ".twitter.com",
+      "every": "24s",
+      "burst": 20
+    },
+    {
+      "host": ".pbs.twimg.com",
+      "every": "125ms"
+    },
+    {
+      "host": "*.cdninstagram",
+      "every": "250ms"
+    },
+    {
+      "host": ".www.instagram.com",
+      "every": "30s",
+      "burst": 3
+    },
+    {
+      "host": ".deviantart.com",
+      "every": "2s",
+      "burst": 3
+    },
+    {
+      "host": ".s3.amazonaws.com",
+      "every": "10s",
+      "burst": 3
     }
   ]
 }

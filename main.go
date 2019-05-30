@@ -6,6 +6,7 @@ import (
 	"github.com/ryanuber/go-glob"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"sort"
@@ -47,14 +48,15 @@ func (a ByConnectionCount) Less(i, j int) bool {
 
 func (p *Proxy) getLimiter(host string) *rate.Limiter {
 
-	expLimit, ok := p.Limiters[host]
-	if !ok {
-		newExpiringLimiter := p.makeNewLimiter(host)
-		return newExpiringLimiter.Limiter
+	for hostGlob, limiter := range p.Limiters {
+		if glob.Glob(hostGlob, host) {
+			limiter.LastRead = time.Now()
+			return limiter.Limiter
+		}
 	}
 
-	expLimit.LastRead = time.Now()
-	return expLimit.Limiter
+	newExpiringLimiter := p.makeNewLimiter(host)
+	return newExpiringLimiter.Limiter
 }
 
 func (p *Proxy) makeNewLimiter(host string) *ExpiringLimiter {
@@ -85,8 +87,26 @@ func simplifyHost(host string) string {
 
 func (b *Balancer) chooseProxy() *Proxy {
 
+	if len(b.proxies) == 0 {
+		return b.proxies[0]
+	}
+
 	sort.Sort(ByConnectionCount(b.proxies))
-	return b.proxies[0]
+
+	p0 := b.proxies[0]
+	proxiesWithSameConnCount := make([]*Proxy, 0)
+	for _, p := range b.proxies {
+		if p.Connections != p0.Connections {
+			break
+		}
+		proxiesWithSameConnCount = append(proxiesWithSameConnCount, p)
+	}
+
+	if len(proxiesWithSameConnCount) > 1 {
+		return proxiesWithSameConnCount[rand.Intn(len(proxiesWithSameConnCount))]
+	} else {
+		return p0
+	}
 }
 
 func New() *Balancer {
@@ -105,7 +125,7 @@ func New() *Balancer {
 			logrus.WithFields(logrus.Fields{
 				"proxy":      p.Name,
 				"connexions": p.Connections,
-				"host":       r.Host,
+				"url":        r.URL,
 			}).Trace("Routing request")
 
 			resp, err := p.processRequest(r)
