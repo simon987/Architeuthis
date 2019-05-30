@@ -21,19 +21,16 @@ func isPermanentError(err error) bool {
 	if ok {
 		opErr, ok = urlErr.Err.(*net.OpError)
 		if !ok {
+			if urlErr.Err != nil && urlErr.Err.Error() == "Proxy Authentication Required" {
+				logrus.Warn("Got 'Proxy Authentication Required'. Did you forget to configure the password for a proxy?")
+				return true
+			}
 			return false
 		}
 	} else {
-		netErr, ok := err.(net.Error)
+		_, ok := err.(net.Error)
 		if ok {
-			if netErr.Timeout() {
-				return false
-			}
-
-			opErr, ok = netErr.(*net.OpError)
-			if !ok {
-				return false
-			}
+			return false
 		}
 	}
 
@@ -80,10 +77,7 @@ func isPermanentError(err error) bool {
 
 func waitTime(retries int) time.Duration {
 
-	const multiplier = 1.5
-	const wait = int64(5 * time.Second)
-
-	return time.Duration(wait * int64(math.Pow(multiplier, float64(retries))))
+	return time.Duration(config.Wait * int64(math.Pow(config.Multiplier, float64(retries))))
 }
 
 func (p *Proxy) waitRateLimit(r *http.Request) {
@@ -101,7 +95,7 @@ func (p *Proxy) waitRateLimit(r *http.Request) {
 	delay := reservation.Delay()
 	if delay > 0 {
 		logrus.WithFields(logrus.Fields{
-			"time": delay,
+			"wait": delay,
 		}).Trace("Sleeping")
 		time.Sleep(delay)
 	}
@@ -115,10 +109,15 @@ func shouldRetryHttpCode(code int) bool {
 
 	switch {
 	case code == 403:
+		fallthrough
 	case code == 408:
+		fallthrough
 	case code == 429:
+		fallthrough
 	case code == 444:
+		fallthrough
 	case code == 499:
+		fallthrough
 	case code >= 500:
 		return true
 	}

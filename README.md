@@ -20,10 +20,14 @@ and error handling. Built for automated web scraping.
 ```json
 {
   "addr": "localhost:5050",
+  "timeout": "15s",
+  "wait": "4s",
+  "multiplier": 2.5,
+  "retries": 3,
   "proxies": [
     {
       "name": "squid_P0",
-      "url": "http://p0.exemple.com:8080"
+      "url": "http://user:pass@p0.exemple.com:8080"
     },
     {
       "name": "privoxy_P1",
@@ -38,7 +42,7 @@ and error handling. Built for automated web scraping.
     },
     "reddit.com": {
       "every": "2s",
-      "burst": 1,
+      "burst": 2,
       "headers": {"User-Agent":  "mybot_v0.1"}
     }
   }

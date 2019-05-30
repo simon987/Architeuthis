@@ -1,5 +1,9 @@
 {
   "addr": "localhost:5050",
+  "timeout": "15s",
+  "wait": "4s",
+  "multiplier": 2.5,
+  "retries": 3,
   "proxies": [
     {
       "name": "p0",
@@ -12,14 +16,20 @@
   ],
   "hosts": {
     "*": {
-      "every": "10s",
-      "burst": 1,
-      "headers": {}
+      "every": "500s",
+      "burst": 25,
+      "headers": {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "max-age=0",
+        "Connection": "keep-alive",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0"
+      }
     },
     "reddit.com": {
-      "every": "100s",
-      "burst": 1,
-      "headers": {}
+      "every": "2s",
+      "burst": 2,
+      "headers": {
+      }
     }
   }
 }

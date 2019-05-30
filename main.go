@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"github.com/elazarl/goproxy"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -58,11 +57,12 @@ func (p *Proxy) getLimiter(host string) *rate.Limiter {
 }
 
 func (p *Proxy) makeNewLimiter(host string) *ExpiringLimiter {
-	every := time.Millisecond //todo load default from conf
+
+	defaultConf := config.Hosts["*"]
 
 	newExpiringLimiter := &ExpiringLimiter{
 		LastRead: time.Now(),
-		Limiter:  rate.NewLimiter(rate.Every(every), 1),
+		Limiter:  rate.NewLimiter(rate.Every(defaultConf.Every), defaultConf.Burst),
 	}
 
 	p.Limiters[host] = newExpiringLimiter
@@ -76,7 +76,12 @@ func (p *Proxy) makeNewLimiter(host string) *ExpiringLimiter {
 
 func simplifyHost(host string) string {
 	if strings.HasPrefix(host, "www.") {
-		return host[4:]
+		host = host[4:]
+	}
+
+	col := strings.LastIndex(host, ":")
+	if col > 0 {
+		host = host[:col]
 	}
 
 	return host
@@ -104,6 +109,7 @@ func New() *Balancer {
 			logrus.WithFields(logrus.Fields{
 				"proxy":      p.Name,
 				"connexions": p.Connections,
+				"host":       r.Host,
 			}).Trace("Routing request")
 
 			resp, err := p.processRequest(r)
@@ -118,22 +124,38 @@ func New() *Balancer {
 	return balancer
 }
 
+func applyHeaders(r *http.Request) *http.Request {
+
+	if conf, ok := config.Hosts["*"]; ok {
+		for k, v := range conf.Headers {
+			r.Header.Set(k, v)
+		}
+	}
+
+	sHost := simplifyHost(r.Host)
+	if conf, ok := config.Hosts[sHost]; ok {
+		for k, v := range conf.Headers {
+			r.Header.Set(k, v)
+		}
+	}
+	return r
+}
+
 func (p *Proxy) processRequest(r *http.Request) (*http.Response, error) {
 
 	p.Connections += 1
 	defer func() {
 		p.Connections -= 1
 	}()
-	retries := 1
-	const maxRetries = 5
+	retries := 0
 
 	p.waitRateLimit(r)
-	proxyReq := preprocessRequest(cloneRequest(r))
+	proxyReq := applyHeaders(cloneRequest(r))
 
 	for {
 
-		if retries > maxRetries {
-			return nil, errors.Errorf("giving up after %d retries", maxRetries)
+		if retries >= config.Retries {
+			return nil, errors.Errorf("giving up after %d retries", config.Retries)
 		}
 
 		resp, err := p.HttpClient.Do(proxyReq)
@@ -177,20 +199,13 @@ func (p *Proxy) processRequest(r *http.Request) (*http.Response, error) {
 
 func (b *Balancer) Run() {
 
-	addr := flag.String("addr", "localhost:5050", "listen address")
-	flag.Parse()
-
 	//b.Verbose = true
 	logrus.WithFields(logrus.Fields{
-		"addr": *addr,
+		"addr": config.Addr,
 	}).Info("Listening")
 
-	err := http.ListenAndServe(*addr, b.server)
+	err := http.ListenAndServe(config.Addr, b.server)
 	logrus.Fatal(err)
-}
-
-func preprocessRequest(r *http.Request) *http.Request {
-	return r
 }
 
 func cloneRequest(r *http.Request) *http.Request {
@@ -223,7 +238,6 @@ func NewProxy(name, stringUrl string) (*Proxy, error) {
 	}
 
 	var httpClient *http.Client
-	//TODO: setup extra headers & qargs here
 	if parsedUrl == nil {
 		httpClient = &http.Client{}
 	} else {
@@ -233,6 +247,8 @@ func NewProxy(name, stringUrl string) (*Proxy, error) {
 			},
 		}
 	}
+
+	httpClient.Timeout = config.Timeout
 
 	return &Proxy{
 		Name:       name,

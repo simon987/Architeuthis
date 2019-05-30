@@ -32,7 +32,7 @@ func (b *Balancer) cleanAllExpiredLimits() {
 
 	logrus.WithFields(logrus.Fields{
 		"removed": before - after,
-	}).Info("Did limiters cleanup")
+	}).Info("Cleaned up limiters")
 }
 
 func cleanExpiredLimits(proxy *Proxy) {

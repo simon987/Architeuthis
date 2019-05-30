@@ -5,7 +5,7 @@ app = Flask(__name__)
 
 
 @app.route("/")
-def hello():
+def slow():
     time.sleep(90)
     return "Hello World!"
 
@@ -17,7 +17,11 @@ def e500():
 
 @app.route("/404")
 def e404():
-    time.sleep(0.5)
+    return Response(status=404)
+
+
+@app.route("/403")
+def e403():
     return Response(status=404)
 
 
