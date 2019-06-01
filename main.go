@@ -123,9 +123,9 @@ func New() *Balancer {
 			p := balancer.chooseProxy()
 
 			logrus.WithFields(logrus.Fields{
-				"proxy":      p.Name,
-				"connexions": p.Connections,
-				"url":        r.URL,
+				"proxy": p.Name,
+				"conns": p.Connections,
+				"url":   r.URL,
 			}).Trace("Routing request")
 
 			resp, err := p.processRequest(r)
