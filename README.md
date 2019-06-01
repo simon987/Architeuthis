@@ -26,6 +26,29 @@ vim config.json # Configure settings here
 ./architeuthis
 ```
 
+### Example usage with wget
+```bash
+export http_proxy="http://localhost:5050"
+# --no-check-certificates is necessary for https mitm
+# You don't need to specify user-agent if it's already in your config.json
+wget -m -np -c --no-check-certificate -R index.html* http http://ca.releases.ubuntu.com/
+```
+
+With `"every": "500ms"` and a single proxy, you should see
+```
+...
+level=trace msg=Sleeping wait=414.324437ms
+level=trace msg="Routing request" conns=0 proxy=p0 url="http://ca.releases.ubuntu.com/12.04/SHA1SUMS.gpg"
+level=trace msg=Sleeping wait=435.166127ms
+level=trace msg="Routing request" conns=0 proxy=p0 url="http://ca.releases.ubuntu.com/12.04/SHA256SUMS"
+level=trace msg=Sleeping wait=438.657784ms
+level=trace msg="Routing request" conns=0 proxy=p0 url="http://ca.releases.ubuntu.com/12.04/SHA256SUMS.gpg"
+level=trace msg=Sleeping wait=457.06543ms
+level=trace msg="Routing request" conns=0 proxy=p0 url="http://ca.releases.ubuntu.com/12.04/ubuntu-12.04.5-alternate-amd64.iso"
+level=trace msg=Sleeping wait=433.394361ms
+...
+```
+
 ### Hot config reload
 
 ```bash
