@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 	"io/ioutil"
 	"os"
@@ -96,6 +97,32 @@ func applyConfig(proxy *Proxy) {
 			time.Now(),
 		}
 	}
+}
+
+func (b *Balancer) reloadConfig() {
+
+	b.proxyMutex.Lock()
+	loadConfig()
+
+	if b.proxies != nil {
+		b.proxies = b.proxies[:0]
+	}
+
+	for _, proxyConf := range config.Proxies {
+		proxy, err := NewProxy(proxyConf.Name, proxyConf.Url)
+		handleErr(err)
+		b.proxies = append(b.proxies, proxy)
+
+		applyConfig(proxy)
+
+		logrus.WithFields(logrus.Fields{
+			"name": proxy.Name,
+			"url":  proxy.Url,
+		}).Info("Proxy")
+	}
+	b.proxyMutex.Unlock()
+
+	logrus.Info("Reloaded config")
 }
 
 func handleErr(err error) {

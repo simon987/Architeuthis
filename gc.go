@@ -24,11 +24,14 @@ func (b *Balancer) setupGarbageCollector() {
 func (b *Balancer) cleanAllExpiredLimits() {
 	before := 0
 	after := 0
+
+	b.proxyMutex.RLock()
 	for _, p := range b.proxies {
 		before += len(p.Limiters)
 		cleanExpiredLimits(p)
 		after += len(p.Limiters)
 	}
+	b.proxyMutex.RUnlock()
 
 	logrus.WithFields(logrus.Fields{
 		"removed": before - after,

@@ -26,7 +26,7 @@ pipeline {
                 sh 'cp *.go "/go/src/github.com/simon987/Architeuthis"'
                 sh 'cd /go/src/github.com/simon987/Architeuthis && go get ./...'
                 sh 'cd /go/src/github.com/simon987/Architeuthis && go build -a -installsuffix cgo -o "${WORKSPACE}/architeuthis" .'
-                sh 'tar -czf ${BUILD_NUMBER}_architeuthis.tar.gz config.json architeuthis'
+                sh 'tar -czf ${BUILD_NUMBER}_architeuthis.tar.gz config.json architeuthis reload.sh'
                 sshPut remote: remote, from: env.BUILD_NUMBER + '_architeuthis.tar.gz', into: 'architeuthis/webroot/'
             }
         }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/elazarl/goproxy"
 	"github.com/pkg/errors"
 	"github.com/ryanuber/go-glob"
@@ -11,12 +12,14 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Balancer struct {
-	server  *goproxy.ProxyHttpServer
-	proxies []*Proxy
+	server     *goproxy.ProxyHttpServer
+	proxies    []*Proxy
+	proxyMutex *sync.RWMutex
 }
 
 type ExpiringLimiter struct {
@@ -113,6 +116,7 @@ func New() *Balancer {
 
 	balancer := new(Balancer)
 
+	balancer.proxyMutex = &sync.RWMutex{}
 	balancer.server = goproxy.NewProxyHttpServer()
 
 	balancer.server.OnRequest().HandleConnect(goproxy.AlwaysMitm)
@@ -120,6 +124,7 @@ func New() *Balancer {
 	balancer.server.OnRequest().DoFunc(
 		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 
+			balancer.proxyMutex.RLock()
 			p := balancer.chooseProxy()
 
 			logrus.WithFields(logrus.Fields{
@@ -129,6 +134,7 @@ func New() *Balancer {
 			}).Trace("Routing request")
 
 			resp, err := p.processRequest(r)
+			balancer.proxyMutex.RUnlock()
 
 			if err != nil {
 				logrus.WithError(err).Trace("Could not complete request")
@@ -137,6 +143,17 @@ func New() *Balancer {
 
 			return nil, resp
 		})
+
+	balancer.server.NonproxyHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		if r.URL.Path == "/reload" {
+			balancer.reloadConfig()
+			_, _ = fmt.Fprint(w, "Reloaded\n")
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, "{\"name\":\"Architeuthis\",\"version\":1.0}")
+		}
+	})
 	return balancer
 }
 
@@ -275,21 +292,8 @@ func NewProxy(name, stringUrl string) (*Proxy, error) {
 func main() {
 	logrus.SetLevel(logrus.TraceLevel)
 
-	loadConfig()
 	balancer := New()
-
-	for _, proxyConf := range config.Proxies {
-		proxy, err := NewProxy(proxyConf.Name, proxyConf.Url)
-		handleErr(err)
-		balancer.proxies = append(balancer.proxies, proxy)
-
-		applyConfig(proxy)
-
-		logrus.WithFields(logrus.Fields{
-			"name": proxy.Name,
-			"url":  proxy.Url,
-		}).Info("Proxy")
-	}
+	balancer.reloadConfig()
 
 	balancer.setupGarbageCollector()
 	balancer.Run()

@@ -19,11 +19,20 @@ and error handling. Built for automated web scraping.
 ### Usage
 
 ```bash
-wget https://simon987.net/data/architeuthis/9_architeuthis.tar.gz
-tar -xzf 9_architeuthis.tar.gz
+wget https://simon987.net/data/architeuthis/11_architeuthis.tar.gz
+tar -xzf 11_architeuthis.tar.gz
 
 vim config.json # Configure settings here
 ./architeuthis
+```
+
+### Hot config reload
+
+```bash
+# Note: this will reset current rate limiters, if there are many active
+# connections, this might cause a small request spike and go over
+# the rate limits.
+./reload.sh
 ```
 
 ### Sample configuration
