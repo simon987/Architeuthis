@@ -16,6 +16,16 @@ and error handling. Built for automated web scraping.
 ### Typical use case
 ![user_case](use_case.png)
 
+### Usage
+
+```bash
+wget https://simon987.net/data/architeuthis/9_architeuthis.tar.gz
+tar -xzf 9_architeuthis.tar.gz
+
+vim config.json # Configure settings here
+./architeuthis
+```
+
 ### Sample configuration
 
 ```json
