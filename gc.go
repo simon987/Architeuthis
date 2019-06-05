@@ -42,32 +42,20 @@ func cleanExpiredLimits(proxy *Proxy) {
 
 	const ttl = time.Hour
 
-	limits := make(map[string]*ExpiringLimiter, 0)
+	var limits []*ExpiringLimiter
 	now := time.Now()
 
 	for host, limiter := range proxy.Limiters {
-		if now.Sub(limiter.LastRead) > ttl && shouldPruneLimiter(host) {
+		if now.Sub(limiter.LastRead) > ttl && limiter.CanDelete {
 			logrus.WithFields(logrus.Fields{
 				"proxy":     proxy.Name,
 				"limiter":   host,
 				"last_read": now.Sub(limiter.LastRead),
 			}).Trace("Pruning limiter")
 		} else {
-			limits[host] = limiter
+			limits = append(limits, limiter)
 		}
 	}
 
 	proxy.Limiters = limits
-}
-
-func shouldPruneLimiter(host string) bool {
-
-	// Don't remove hosts that are coming from the config
-	for _, conf := range config.Hosts {
-		if conf.Host == host {
-			return false
-		}
-	}
-
-	return true
 }

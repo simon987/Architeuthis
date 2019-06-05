@@ -23,16 +23,24 @@ type Balancer struct {
 }
 
 type ExpiringLimiter struct {
-	Limiter  *rate.Limiter
-	LastRead time.Time
+	HostGlob  string
+	IsGlob    bool
+	CanDelete bool
+	Limiter   *rate.Limiter
+	LastRead  time.Time
 }
 
 type Proxy struct {
 	Name        string
 	Url         *url.URL
-	Limiters    map[string]*ExpiringLimiter
+	Limiters    []*ExpiringLimiter
 	HttpClient  *http.Client
 	Connections int
+}
+
+type RequestCtx struct {
+	RequestTime time.Time
+	Response    *http.Response
 }
 
 type ByConnectionCount []*Proxy
@@ -51,8 +59,13 @@ func (a ByConnectionCount) Less(i, j int) bool {
 
 func (p *Proxy) getLimiter(host string) *rate.Limiter {
 
-	for hostGlob, limiter := range p.Limiters {
-		if glob.Glob(hostGlob, host) {
+	for _, limiter := range p.Limiters {
+		if limiter.IsGlob {
+			if glob.Glob(limiter.HostGlob, host) {
+				limiter.LastRead = time.Now()
+				return limiter.Limiter
+			}
+		} else if limiter.HostGlob == host {
 			limiter.LastRead = time.Now()
 			return limiter.Limiter
 		}
@@ -65,14 +78,18 @@ func (p *Proxy) getLimiter(host string) *rate.Limiter {
 func (p *Proxy) makeNewLimiter(host string) *ExpiringLimiter {
 
 	newExpiringLimiter := &ExpiringLimiter{
-		LastRead: time.Now(),
-		Limiter:  rate.NewLimiter(rate.Every(config.DefaultConfig.Every), config.DefaultConfig.Burst),
+		CanDelete: false,
+		HostGlob:  host,
+		IsGlob:    false,
+		LastRead:  time.Now(),
+		Limiter:   rate.NewLimiter(rate.Every(config.DefaultConfig.Every), config.DefaultConfig.Burst),
 	}
 
-	p.Limiters[host] = newExpiringLimiter
+	p.Limiters = append([]*ExpiringLimiter{newExpiringLimiter}, p.Limiters...)
 
 	logrus.WithFields(logrus.Fields{
-		"host": host,
+		"host":  host,
+		"every": config.DefaultConfig.Every,
 	}).Trace("New limiter")
 
 	return newExpiringLimiter
@@ -96,7 +113,18 @@ func (b *Balancer) chooseProxy() *Proxy {
 
 	sort.Sort(ByConnectionCount(b.proxies))
 
-	p0 := b.proxies[0]
+	proxyWithLeastConns := b.proxies[0]
+	proxiesWithSameConnCount := b.getProxiesWithSameConnCountAs(proxyWithLeastConns)
+
+	if len(proxiesWithSameConnCount) > 1 {
+		return proxiesWithSameConnCount[rand.Intn(len(proxiesWithSameConnCount))]
+	} else {
+		return proxyWithLeastConns
+	}
+}
+
+func (b *Balancer) getProxiesWithSameConnCountAs(p0 *Proxy) []*Proxy {
+
 	proxiesWithSameConnCount := make([]*Proxy, 0)
 	for _, p := range b.proxies {
 		if p.Connections != p0.Connections {
@@ -104,12 +132,7 @@ func (b *Balancer) chooseProxy() *Proxy {
 		}
 		proxiesWithSameConnCount = append(proxiesWithSameConnCount, p)
 	}
-
-	if len(proxiesWithSameConnCount) > 1 {
-		return proxiesWithSameConnCount[rand.Intn(len(proxiesWithSameConnCount))]
-	} else {
-		return p0
-	}
+	return proxiesWithSameConnCount
 }
 
 func New() *Balancer {
@@ -157,19 +180,59 @@ func New() *Balancer {
 	return balancer
 }
 
-func applyHeaders(r *http.Request) *http.Request {
+func getConfsMatchingRequest(r *http.Request) []*HostConfig {
 
 	sHost := simplifyHost(r.Host)
 
+	configs := make([]*HostConfig, 0)
+
 	for _, conf := range config.Hosts {
 		if glob.Glob(conf.Host, sHost) {
-			for k, v := range conf.Headers {
-				r.Header.Set(k, v)
-			}
+			configs = append(configs, conf)
+		}
+	}
+
+	return configs
+}
+
+func applyHeaders(r *http.Request, configs []*HostConfig) *http.Request {
+
+	for _, conf := range configs {
+		for k, v := range conf.Headers {
+			r.Header.Set(k, v)
 		}
 	}
 
 	return r
+}
+
+func computeRules(ctx *RequestCtx, configs []*HostConfig) (dontRetry, forceRetry bool,
+	limitMultiplier, newLimit float64, shouldRetry bool) {
+	dontRetry = false
+	forceRetry = false
+	shouldRetry = false
+	limitMultiplier = 1
+
+	for _, conf := range configs {
+		for _, rule := range conf.Rules {
+			if rule.Matches(ctx) {
+				switch rule.Action {
+				case DontRetry:
+					dontRetry = true
+				case MultiplyEvery:
+					limitMultiplier = rule.Arg
+				case SetEvery:
+					newLimit = rule.Arg
+				case ForceRetry:
+					forceRetry = true
+				case ShouldRetry:
+					shouldRetry = true
+				}
+			}
+		}
+	}
+
+	return
 }
 
 func (p *Proxy) processRequest(r *http.Request) (*http.Response, error) {
@@ -179,25 +242,41 @@ func (p *Proxy) processRequest(r *http.Request) (*http.Response, error) {
 		p.Connections -= 1
 	}()
 	retries := 0
+	additionalRetries := 0
 
-	p.waitRateLimit(r)
-	proxyReq := applyHeaders(cloneRequest(r))
+	configs := getConfsMatchingRequest(r)
+	sHost := simplifyHost(r.Host)
+	limiter := p.getLimiter(sHost)
+
+	proxyReq := applyHeaders(cloneRequest(r), configs)
 
 	for {
+		p.waitRateLimit(limiter)
 
-		if retries >= config.Retries {
-			return nil, errors.Errorf("giving up after %d retries", config.Retries)
+		if retries >= config.Retries+additionalRetries || retries > config.RetriesHard {
+			return nil, errors.Errorf("giving up after %d retries", retries)
 		}
 
-		resp, err := p.HttpClient.Do(proxyReq)
+		ctx := &RequestCtx{
+			RequestTime: time.Now(),
+		}
+		var err error
+		ctx.Response, err = p.HttpClient.Do(proxyReq)
 
 		if err != nil {
 			if isPermanentError(err) {
 				return nil, err
 			}
 
-			wait := waitTime(retries)
+			dontRetry, forceRetry, limitMultiplier, newLimit, _ := computeRules(ctx, configs)
+			if forceRetry {
+				additionalRetries += 1
+			} else if dontRetry {
+				return nil, errors.Errorf("Applied dont_retry rule for (%s)", err)
+			}
+			p.applyLimiterRules(newLimit, limiter, limitMultiplier)
 
+			wait := waitTime(retries)
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"wait": wait,
 			}).Trace("Temporary error during request")
@@ -207,24 +286,42 @@ func (p *Proxy) processRequest(r *http.Request) (*http.Response, error) {
 			continue
 		}
 
-		if isHttpSuccessCode(resp.StatusCode) {
+		// Compute rules
+		dontRetry, forceRetry, limitMultiplier, newLimit, shouldRetry := computeRules(ctx, configs)
 
-			return resp, nil
-		} else if shouldRetryHttpCode(resp.StatusCode) {
+		if forceRetry {
+			additionalRetries += 1
+		} else if dontRetry {
+			return nil, errors.Errorf("Applied dont_retry rule")
+		}
+		p.applyLimiterRules(newLimit, limiter, limitMultiplier)
+
+		if isHttpSuccessCode(ctx.Response.StatusCode) {
+			return ctx.Response, nil
+
+		} else if forceRetry || shouldRetry || shouldRetryHttpCode(ctx.Response.StatusCode) {
 
 			wait := waitTime(retries)
 
 			logrus.WithFields(logrus.Fields{
 				"wait":   wait,
-				"status": resp.StatusCode,
+				"status": ctx.Response.StatusCode,
 			}).Trace("HTTP error during request")
 
 			time.Sleep(wait)
 			retries += 1
 			continue
 		} else {
-			return nil, errors.Errorf("HTTP error: %d", resp.StatusCode)
+			return nil, errors.Errorf("HTTP error: %d", ctx.Response.StatusCode)
 		}
+	}
+}
+
+func (p *Proxy) applyLimiterRules(newLimit float64, limiter *rate.Limiter, limitMultiplier float64) {
+	if newLimit != 0 {
+		limiter.SetLimit(rate.Limit(newLimit))
+	} else if limitMultiplier != 1 {
+		limiter.SetLimit(limiter.Limit() * rate.Limit(1/limitMultiplier))
 	}
 }
 
@@ -285,7 +382,6 @@ func NewProxy(name, stringUrl string) (*Proxy, error) {
 		Name:       name,
 		Url:        parsedUrl,
 		HttpClient: httpClient,
-		Limiters:   make(map[string]*ExpiringLimiter),
 	}, nil
 }
 

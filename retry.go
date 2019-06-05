@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 	"log"
 	"math"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"syscall"
@@ -80,17 +80,9 @@ func waitTime(retries int) time.Duration {
 	return time.Duration(config.Wait * int64(math.Pow(config.Multiplier, float64(retries))))
 }
 
-func (p *Proxy) waitRateLimit(r *http.Request) {
+func (p *Proxy) waitRateLimit(limiter *rate.Limiter) {
 
-	sHost := simplifyHost(r.Host)
-
-	limiter := p.getLimiter(sHost)
 	reservation := limiter.Reserve()
-	if !reservation.OK() {
-		logrus.WithFields(logrus.Fields{
-			"host": sHost,
-		}).Warn("Could not get reservation, make sure that burst is > 0")
-	}
 
 	delay := reservation.Delay()
 	if delay > 0 {

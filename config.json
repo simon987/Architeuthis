@@ -4,6 +4,7 @@
   "wait": "4s",
   "multiplier": 2.5,
   "retries": 3,
+  "retries_hard": 6,
   "proxies": [
     {
       "name": "p0",
@@ -20,7 +21,10 @@
         "Cache-Control": "max-age=0",
         "Connection": "keep-alive",
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0"
-      }
+      },
+      "rules": [
+        {"condition":  "response_time>10s", "action":  "dont_retry"}
+      ]
     },
     {
       "host": "*.reddit.com",
@@ -37,12 +41,8 @@
       "every": "125ms"
     },
     {
-      "host": "*.cdninstagram",
-      "every": "250ms"
-    },
-    {
       "host": ".www.instagram.com",
-      "every": "30s",
+      "every": "4500ms",
       "burst": 3
     },
     {
@@ -53,7 +53,10 @@
     {
       "host": ".s3.amazonaws.com",
       "every": "10s",
-      "burst": 3
+      "burst": 1,
+      "rules": [
+        {"condition":  "status=403", "action":  "dont_retry"}
+      ]
     }
   ]
 }

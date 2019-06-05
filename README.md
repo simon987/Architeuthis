@@ -12,6 +12,7 @@ and error handling. Built for automated web scraping.
 * Strictly obeys configured rate-limiting for each IP & Host
 * Seamless exponential backoff retries on timeout or error HTTP codes
 * Requires no additional configuration for integration into existing programs
+* Configurable per-host behavior
 
 ### Typical use case
 ![user_case](use_case.png)
@@ -58,6 +59,51 @@ level=trace msg=Sleeping wait=433.394361ms
 ./reload.sh
 ```
 
+### Rules
+
+
+Conditions
+
+| Left operand | Description | Allowed operators | Right operand
+| :--- | :--- | :--- | :---
+| body | Contents of the response | `=`, `!=` | String w/ wildcard
+| body | Contents of the response | `<`, `>` | float
+| status | HTTP response code | `=`, `!=` | String w/ wildcard
+| status | HTTP response code | `<`, `>` | float
+| response_time | HTTP response code | `<`, `>` | duration (e.g. `20s`)
+| header:`<header>` | Response header | `=`, `!=` | String w/ wildcard
+| header:`<header>` | Response header | `<`, `>` | float
+
+Note that `response_time` can never be higher than the configured `timeout` value.
+
+Examples:
+
+```json
+[
+  {"condition":  "header:X-Test>10", "action":  "..."},
+  {"condition":  "body=*Try again in a few minutes*", "action":  "..."},
+  {"condition":  "response_time>10s", "action":  "..."},
+  {"condition":  "status>500", "action":  "..."},
+  {"condition":  "status=404", "action":  "..."},
+  {"condition":  "status=40*", "action":  "..."}
+]
+```
+
+Actions
+
+| Action | Description | `arg` value | 
+| :--- | :--- | :--- |
+| should_retry | Override default retry behavior for http errors (by default it retries on 403,408,429,444,499,>500)
+| force_retry | Always retry (Up to retries_hard times)
+| dont_retry | Immediately stop retrying
+| multiply_every | Multiply the current limiter's 'every' value by `arg` | `1.5`(float)
+| set_every | Set the current limiter's 'every' value to `arg` | `10s`(duration)
+
+In the event of a temporary network error, `should_retry` is ignored (it will always retry unless `dont_retry` is set)
+
+Note that having too many rules for one host might negatively impact performance (especially the `body` condition for large requests)
+
+
 ### Sample configuration
 
 ```json
@@ -67,6 +113,7 @@ level=trace msg=Sleeping wait=433.394361ms
   "wait": "4s",
   "multiplier": 2.5,
   "retries": 3,
+  "retries_hard": 6,
   "proxies": [
     {
       "name": "squid_P0",
@@ -83,7 +130,7 @@ level=trace msg=Sleeping wait=433.394361ms
       "every": "500ms",
       "burst": 25,
       "headers": {
-        "User-Agent": "Some user agent",
+        "User-Agent": "Some user agent for all requests",
         "X-Test": "Will be overwritten"
       }
     },
@@ -94,6 +141,22 @@ level=trace msg=Sleeping wait=433.394361ms
       "headers": {
         "X-Test": "Will overwrite default"
       }
+    },
+    {
+      "host": ".s3.amazonaws.com",
+      "every": "2s",
+      "burst": 30,
+      "rules": [
+        {"condition": "status=403", "action": "dont_retry"}
+      ]
+    },
+    {
+      "host": ".www.instagram.com",
+      "every": "4500ms",
+      "burst": 3,
+      "rules": [
+        {"condition":  "body=*please try again in a few minutes*", "action": "multiply_every", "arg": "2"}
+      ]
     }
   ]
 }
