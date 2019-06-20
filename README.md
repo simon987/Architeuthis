@@ -20,7 +20,7 @@ and error handling. Built for automated web scraping.
 ### Usage
 
 ```bash
-wget https://simon987.net/data/architeuthis/11_architeuthis.tar.gz
+wget https://simon987.net/data/architeuthis/14_architeuthis.tar.gz
 tar -xzf 11_architeuthis.tar.gz
 
 vim config.json # Configure settings here
