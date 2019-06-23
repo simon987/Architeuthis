@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,7 +36,7 @@ type Proxy struct {
 	Url         *url.URL
 	Limiters    []*ExpiringLimiter
 	HttpClient  *http.Client
-	Connections int
+	Connections *int32
 }
 
 type RequestCtx struct {
@@ -54,7 +55,7 @@ func (a ByConnectionCount) Swap(i, j int) {
 }
 
 func (a ByConnectionCount) Less(i, j int) bool {
-	return a[i].Connections < a[j].Connections
+	return *a[i].Connections < *a[j].Connections
 }
 
 func (p *Proxy) getLimiter(host string) *rate.Limiter {
@@ -152,7 +153,7 @@ func New() *Balancer {
 
 			logrus.WithFields(logrus.Fields{
 				"proxy": p.Name,
-				"conns": p.Connections,
+				"conns": *p.Connections,
 				"url":   r.URL,
 			}).Trace("Routing request")
 
@@ -237,9 +238,9 @@ func computeRules(ctx *RequestCtx, configs []*HostConfig) (dontRetry, forceRetry
 
 func (p *Proxy) processRequest(r *http.Request) (*http.Response, error) {
 
-	p.Connections += 1
+	atomic.AddInt32(p.Connections, 1)
 	defer func() {
-		p.Connections -= 1
+		atomic.AddInt32(p.Connections, -1)
 	}()
 	retries := 0
 	additionalRetries := 0
@@ -378,11 +379,15 @@ func NewProxy(name, stringUrl string) (*Proxy, error) {
 
 	httpClient.Timeout = config.Timeout
 
-	return &Proxy{
+	p := &Proxy{
 		Name:       name,
 		Url:        parsedUrl,
 		HttpClient: httpClient,
-	}, nil
+	}
+
+	conns := int32(0)
+	p.Connections = &conns
+	return p, nil
 }
 
 func main() {
