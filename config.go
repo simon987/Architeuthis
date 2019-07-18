@@ -82,10 +82,10 @@ var config struct {
 	Wait          int64
 	Timeout       time.Duration
 	DefaultConfig *HostConfig
+	Routing       bool
 }
 
 func parseRule(raw *RawHostRule) (*HostRule, error) {
-	//TODO: for the love of god someone please refactor this func
 
 	rule := &HostRule{}
 	var err error

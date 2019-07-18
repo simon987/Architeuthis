@@ -4,8 +4,6 @@
 ![GitHub](https://img.shields.io/github/license/simon987/Architeuthis.svg)
 [![Build Status](https://ci.simon987.net/buildStatus/icon?job=architeuthis_builds)](https://ci.simon987.net/job/architeuthis_builds/)
 
-*NOTE: this is very WIP* 
-
 HTTP(S) proxy with integrated load-balancing, rate-limiting
 and error handling. Built for automated web scraping.
 
@@ -13,6 +11,7 @@ and error handling. Built for automated web scraping.
 * Seamless exponential backoff retries on timeout or error HTTP codes
 * Requires no additional configuration for integration into existing programs
 * Configurable per-host behavior
+* Proxy routing (Requests can be forced to use a specific proxy with header param)
 
 ### Typical use case
 ![user_case](use_case.png)
@@ -20,8 +19,8 @@ and error handling. Built for automated web scraping.
 ### Usage
 
 ```bash
-wget https://simon987.net/data/architeuthis/15_architeuthis.tar.gz
-tar -xzf 15_architeuthis.tar.gz
+wget https://simon987.net/data/architeuthis/16_architeuthis.tar.gz
+tar -xzf 16_architeuthis.tar.gz
 
 vim config.json # Configure settings here
 ./architeuthis
@@ -49,6 +48,89 @@ level=trace msg="Routing request" conns=0 proxy=p0 url="http://ca.releases.ubunt
 level=trace msg=Sleeping wait=433.394361ms
 ...
 ```
+
+### Proxy routing
+
+To use routing, enable the `routing` parameter in the configuration file.
+
+**Explicitly choose proxy**
+
+You can force a request to go through a specific proxy by using the `X-Architeuthis-Proxy` header.
+When specified and `routing` is
+enabled in the config file, the request will use the proxy with the
+matching name.
+
+Example:
+
+in `config.json`:
+```
+...
+  routing: true,
+  "proxies": [
+    {
+      "name": "p0",
+      "url": ""
+    },
+    {
+      "name": "p1",
+      "url": ""
+    },
+    ...
+  ],
+```
+
+This request will *always* be routed through the **p0** proxy:
+```bash
+curl https://google.ca/ -k -H "X-Architeuthis-Proxy: p0"
+```
+
+Invalid/blank values are silently ignored; the request will be routed
+according to the usual load balancer rules.
+
+**Hashed routing**
+
+You can also use the `X-Architeuthis-Hash` header to specify an abitrary string.
+The string will be hashed and uniformly routed to its corresponding proxy. Unless the number
+proxy changes, requests with the same hash value will always be routed to the same proxy.
+
+Example:
+
+`X-Architeuthis-Hash: userOne` is guaranteed to always be routed to the same proxy.    
+`X-Architeuthis-Hash: userTwo` is also guaranteed to always be routed to the same proxy,
+but **not necessarily a proxy different than userOne**.
+
+
+**Unique string routing**
+
+You can use the `X-Architeuthis-Unique` header to specify a unique string that 
+will be dynamically associated to a single proxy. 
+
+The first time such a request is received, the unique string is bound to a proxy and
+will *always* be routed to this proxy. Any other non-empty value for this header will
+be routed to another proxy and bound to it.
+ 
+ This means that you cannot use more unique strings than proxies,
+doing so will cause the request to drop and will show the message 
+`No blank proxies to route this request!`.
+
+Reloading the configuration or restarting the `architeuthis` instance will clear the
+proxy binds.
+
+Example with configured proxies p0-p3:
+```
+msg=Listening addr="localhost:5050"
+msg="Bound unique param user1 to p3"
+msg="Routing request" conns=0 proxy=p3 url="https://google.ca:443/"
+msg="Bound unique param user2 to p2"
+msg="Routing request" conns=0 proxy=p2 url="https://google.ca:443/"
+msg="Bound unique param user3 to p1"
+msg="Routing request" conns=0 proxy=p1 url="https://google.ca:443/"
+msg="Bound unique param user4 to p0"
+msg="Routing request" conns=0 proxy=p0 url="https://google.ca:443/"
+msg="No blank proxies to route this request!" unique param=user5
+```
+
+The `X-Architeuthis-*` header *will not* be sent to the remote host. 
 
 ### Hot config reload
 
@@ -114,6 +196,7 @@ Note that having too many rules for one host might negatively impact performance
   "multiplier": 2.5,
   "retries": 3,
   "retries_hard": 6,
+  "routing": true,
   "proxies": [
     {
       "name": "squid_P0",

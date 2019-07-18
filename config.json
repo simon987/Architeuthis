@@ -5,16 +5,29 @@
   "multiplier": 2.5,
   "retries": 3,
   "retries_hard": 6,
+  "routing": true,
   "proxies": [
     {
       "name": "p0",
+      "url": ""
+    },
+    {
+      "name": "p1",
+      "url": ""
+    },
+    {
+      "name": "p2",
+      "url": ""
+    },
+    {
+      "name": "p3",
       "url": ""
     }
   ],
   "hosts": [
     {
       "host": "*",
-      "every": "500ms",
+      "every": "125ms",
       "burst": 25,
       "headers": {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -25,6 +38,14 @@
       "rules": [
         {"condition":  "response_time>10s", "action":  "dont_retry"}
       ]
+    },
+    {
+      "host": ".i.imgur.com",
+      "every": "100ms",
+      "burst": 1,
+      "headers": {
+        "User-Agent": "curl/7.65.1"
+      }
     },
     {
       "host": "*.reddit.com",
@@ -49,6 +70,14 @@
       "host": ".deviantart.com",
       "every": "2s",
       "burst": 3
+    },
+    {
+      "host": ".ve.media.tumblr.com",
+      "every": "200ms",
+      "burst": 30,
+      "rules": [
+        {"condition":  "status=403", "action":  "dont_retry"}
+      ]
     },
     {
       "host": ".s3.amazonaws.com",

@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"github.com/dchest/siphash"
 	"github.com/elazarl/goproxy"
 	"github.com/pkg/errors"
 	"github.com/ryanuber/go-glob"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -37,6 +39,7 @@ type Proxy struct {
 	Limiters    []*ExpiringLimiter
 	HttpClient  *http.Client
 	Connections *int32
+	UniqueParam string
 }
 
 type RequestCtx struct {
@@ -106,10 +109,64 @@ func simplifyHost(host string) string {
 	return "." + host
 }
 
-func (b *Balancer) chooseProxy() *Proxy {
+func (b *Balancer) chooseProxy(r *http.Request) (*Proxy, error) {
 
 	if len(b.proxies) == 0 {
-		return b.proxies[0]
+		return b.proxies[0], nil
+	}
+
+	if config.Routing {
+		routingProxyParam := r.Header.Get("X-Architeuthis-Proxy")
+		r.Header.Del("X-Architeuthis-Proxy")
+
+		if routingProxyParam != "" {
+			p := b.getProxyByNameOrNil(routingProxyParam)
+			if p != nil {
+				return p, nil
+			}
+		}
+
+		routingHashParam := r.Header.Get("X-Architeuthis-Hash")
+		r.Header.Del("X-Architeuthis-Hash")
+
+		if routingHashParam != "" {
+			hash := siphash.Hash(1, 2, []byte(routingHashParam))
+			if hash == 0 {
+				hash = 1
+			}
+
+			pIdx := int(float64(hash) / (float64(math.MaxUint64) / float64(len(b.proxies))))
+
+			logrus.WithFields(logrus.Fields{
+				"hash": routingHashParam,
+			}).Trace("Using hash")
+
+			return b.proxies[pIdx], nil
+		}
+
+		routingUniqueParam := r.Header.Get("X-Architeuthis-Unique")
+		r.Header.Del("X-Architeuthis-Unique")
+
+		if routingUniqueParam != "" {
+
+			var blankProxy *Proxy
+
+			for _, p := range b.proxies {
+				if p.UniqueParam == "" {
+					blankProxy = p
+				} else if p.UniqueParam == routingUniqueParam {
+					return p, nil
+				}
+			}
+			if blankProxy != nil {
+				blankProxy.UniqueParam = routingUniqueParam
+				logrus.Infof("Bound unique param %s to %s", routingUniqueParam, blankProxy.Name)
+				return blankProxy, nil
+			} else {
+				logrus.WithField("unique param", routingUniqueParam).Error("No blank proxies to route this request!")
+				return nil, errors.Errorf("No blank proxies to route this request! unique param: %s", routingUniqueParam)
+			}
+		}
 	}
 
 	sort.Sort(ByConnectionCount(b.proxies))
@@ -118,17 +175,29 @@ func (b *Balancer) chooseProxy() *Proxy {
 	proxiesWithSameConnCount := b.getProxiesWithSameConnCountAs(proxyWithLeastConns)
 
 	if len(proxiesWithSameConnCount) > 1 {
-		return proxiesWithSameConnCount[rand.Intn(len(proxiesWithSameConnCount))]
+		return proxiesWithSameConnCount[rand.Intn(len(proxiesWithSameConnCount))], nil
 	} else {
-		return proxyWithLeastConns
+		return proxyWithLeastConns, nil
 	}
+}
+
+func (b *Balancer) getProxyByNameOrNil(routingParam string) *Proxy {
+	if routingParam != "" {
+		for _, p := range b.proxies {
+			if p.Name == routingParam {
+				return p
+			}
+		}
+	}
+
+	return nil
 }
 
 func (b *Balancer) getProxiesWithSameConnCountAs(p0 *Proxy) []*Proxy {
 
 	proxiesWithSameConnCount := make([]*Proxy, 0)
 	for _, p := range b.proxies {
-		if p.Connections != p0.Connections {
+		if *p.Connections != *p0.Connections {
 			break
 		}
 		proxiesWithSameConnCount = append(proxiesWithSameConnCount, p)
@@ -149,7 +218,12 @@ func New() *Balancer {
 		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 
 			balancer.proxyMutex.RLock()
-			p := balancer.chooseProxy()
+			defer balancer.proxyMutex.RUnlock()
+			p, err := balancer.chooseProxy(r)
+
+			if err != nil {
+				return nil, goproxy.NewResponse(r, "text/plain", 500, err.Error())
+			}
 
 			logrus.WithFields(logrus.Fields{
 				"proxy": p.Name,
@@ -158,7 +232,6 @@ func New() *Balancer {
 			}).Trace("Routing request")
 
 			resp, err := p.processRequest(r)
-			balancer.proxyMutex.RUnlock()
 
 			if err != nil {
 				logrus.WithError(err).Trace("Could not complete request")
