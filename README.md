@@ -19,8 +19,8 @@ and error handling. Built for automated web scraping.
 ### Usage
 
 ```bash
-wget https://simon987.net/data/architeuthis/16_architeuthis.tar.gz
-tar -xzf 16_architeuthis.tar.gz
+wget https://simon987.net/data/architeuthis/17_architeuthis.tar.gz
+tar -xzf 17_architeuthis.tar.gz
 
 vim config.json # Configure settings here
 ./architeuthis
@@ -31,7 +31,7 @@ vim config.json # Configure settings here
 export http_proxy="http://localhost:5050"
 # --no-check-certificates is necessary for https mitm
 # You don't need to specify user-agent if it's already in your config.json
-wget -m -np -c --no-check-certificate -R index.html* http http://ca.releases.ubuntu.com/
+wget -m -np -c --no-check-certificate -R index.html* http://ca.releases.ubuntu.com/
 ```
 
 With `"every": "500ms"` and a single proxy, you should see
