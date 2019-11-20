@@ -103,8 +103,8 @@ Examples:
 
 Actions
 
-| Action | Description | `arg` value | 
-| :--- | :--- | :--- |
+| Action | Description
+| :--- | :--- |
 | should_retry | Override default retry behavior for http errors (by default it retries on 403,408,429,444,499,>500)
 | force_retry | Always retry (Up to retries_hard times)
 | dont_retry | Immediately stop retrying
