@@ -7,7 +7,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/ryanuber/go-glob"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/time/rate"
 	"io/ioutil"
 	"os"
 	"reflect"
@@ -17,40 +16,10 @@ import (
 	"time"
 )
 
-type HostConfig struct {
-	Host     string            `json:"host"`
-	EveryStr string            `json:"every"`
-	Burst    int               `json:"burst"`
-	Headers  map[string]string `json:"headers"`
-	RawRules []*RawHostRule    `json:"rules"`
-	Every    time.Duration
-	Rules    []*HostRule
-}
-
-type RawHostRule struct {
-	Condition string `json:"condition"`
-	Action    string `json:"action"`
-	Arg       string `json:"arg"`
-}
-
-type HostRuleAction int
-
-const (
-	DontRetry     HostRuleAction = 0
-	MultiplyEvery HostRuleAction = 1
-	SetEvery      HostRuleAction = 2
-	ForceRetry    HostRuleAction = 3
-	ShouldRetry   HostRuleAction = 4
-)
-
 func (a HostRuleAction) String() string {
 	switch a {
 	case DontRetry:
 		return "dont_retry"
-	case MultiplyEvery:
-		return "multiply_every"
-	case SetEvery:
-		return "set_every"
 	case ForceRetry:
 		return "force_retry"
 	case ShouldRetry:
@@ -59,61 +28,19 @@ func (a HostRuleAction) String() string {
 	return "???"
 }
 
-type HostRule struct {
-	Matches func(r *RequestCtx) bool
-	Action  HostRuleAction
-	Arg     float64
-}
-
-type ProxyConfig struct {
-	Name string `json:"name"`
-	Url  string `json:"url"`
-}
-
-var config struct {
-	Addr          string        `json:"addr"`
-	TimeoutStr    string        `json:"timeout"`
-	WaitStr       string        `json:"wait"`
-	Multiplier    float64       `json:"multiplier"`
-	Retries       int           `json:"retries"`
-	RetriesHard   int           `json:"retries_hard"`
-	Hosts         []*HostConfig `json:"hosts"`
-	Proxies       []ProxyConfig `json:"proxies"`
-	Wait          int64
-	Timeout       time.Duration
-	DefaultConfig *HostConfig
-	Routing       bool
-}
-
 func parseRule(raw *RawHostRule) (*HostRule, error) {
 
 	rule := &HostRule{}
-	var err error
 
 	switch raw.Action {
 	case "should_retry":
 		rule.Action = ShouldRetry
 	case "dont_retry":
 		rule.Action = DontRetry
-	case "multiply_every":
-		rule.Action = MultiplyEvery
-		rule.Arg, err = strconv.ParseFloat(raw.Arg, 64)
-	case "set_every":
-		rule.Action = SetEvery
-		var duration time.Duration
-		duration, err = time.ParseDuration(raw.Arg)
-		if err != nil {
-			return nil, err
-		}
-		rule.Arg = 1 / duration.Seconds()
 	case "force_retry":
 		rule.Action = ForceRetry
 	default:
 		return nil, errors.Errorf("Invalid argument for action: %s", raw.Action)
-	}
-
-	if err != nil {
-		return nil, err
 	}
 
 	switch {
@@ -125,12 +52,12 @@ func parseRule(raw *RawHostRule) (*HostRule, error) {
 		}
 
 		if isGlob(op2Str) {
-			rule.Matches = func(ctx *RequestCtx) bool {
+			rule.Matches = func(ctx *ResponseCtx) bool {
 				return !glob.Glob(op2Str, op1Func(ctx))
 			}
 		} else {
 			op2Str = strings.Replace(op2Str, "\\*", "*", -1)
-			rule.Matches = func(ctx *RequestCtx) bool {
+			rule.Matches = func(ctx *ResponseCtx) bool {
 				return op1Func(ctx) != op2Str
 			}
 		}
@@ -142,12 +69,12 @@ func parseRule(raw *RawHostRule) (*HostRule, error) {
 		}
 
 		if isGlob(op2Str) {
-			rule.Matches = func(ctx *RequestCtx) bool {
+			rule.Matches = func(ctx *ResponseCtx) bool {
 				return glob.Glob(op2Str, op1Func(ctx))
 			}
 		} else {
 			op2Str = strings.Replace(op2Str, "\\*", "*", -1)
-			rule.Matches = func(ctx *RequestCtx) bool {
+			rule.Matches = func(ctx *ResponseCtx) bool {
 				return op1Func(ctx) == op2Str
 			}
 		}
@@ -162,7 +89,7 @@ func parseRule(raw *RawHostRule) (*HostRule, error) {
 			return nil, err
 		}
 
-		rule.Matches = func(ctx *RequestCtx) bool {
+		rule.Matches = func(ctx *ResponseCtx) bool {
 			op1Num, err := strconv.ParseFloat(op1Func(ctx), 64)
 			handleRuleErr(err)
 			return op1Num > op2Num
@@ -178,7 +105,7 @@ func parseRule(raw *RawHostRule) (*HostRule, error) {
 			return nil, err
 		}
 
-		rule.Matches = func(ctx *RequestCtx) bool {
+		rule.Matches = func(ctx *ResponseCtx) bool {
 			op1Num, err := strconv.ParseFloat(op1Func(ctx), 64)
 			handleRuleErr(err)
 			return op1Num < op2Num
@@ -214,10 +141,10 @@ func parseOperand2(op1, op2 string) (float64, error) {
 	return strconv.ParseFloat(op2, 64)
 }
 
-func parseOperand1(op string) func(ctx *RequestCtx) string {
+func parseOperand1(op string) func(ctx *ResponseCtx) string {
 	switch {
 	case op == "body":
-		return func(ctx *RequestCtx) string {
+		return func(ctx *ResponseCtx) string {
 
 			if ctx.Response == nil {
 				return ""
@@ -235,19 +162,19 @@ func parseOperand1(op string) func(ctx *RequestCtx) string {
 			return string(bodyBytes)
 		}
 	case op == "status":
-		return func(ctx *RequestCtx) string {
+		return func(ctx *ResponseCtx) string {
 			if ctx.Response == nil {
 				return ""
 			}
 			return strconv.Itoa(ctx.Response.StatusCode)
 		}
 	case op == "response_time":
-		return func(ctx *RequestCtx) string {
-			return strconv.FormatFloat(time.Now().Sub(ctx.RequestTime).Seconds(), 'f', 6, 64)
+		return func(ctx *ResponseCtx) string {
+			return strconv.FormatFloat(ctx.ResponseTime, 'f', 6, 64)
 		}
 	case strings.HasPrefix(op, "header:"):
 		header := op[strings.Index(op, ":")+1:]
-		return func(ctx *RequestCtx) string {
+		return func(ctx *ResponseCtx) string {
 			if ctx.Response == nil {
 				return ""
 			}
@@ -356,49 +283,8 @@ func validateConfig() {
 	}
 }
 
-func applyConfig(proxy *Proxy) {
-
-	//Reverse order
-	for i := len(config.Hosts) - 1; i >= 0; i-- {
-
-		conf := config.Hosts[i]
-
-		proxy.Limiters = append(proxy.Limiters, &ExpiringLimiter{
-			HostGlob:  conf.Host,
-			IsGlob:    isGlob(conf.Host),
-			Limiter:   rate.NewLimiter(rate.Every(conf.Every), conf.Burst),
-			LastRead:  time.Now(),
-			CanDelete: false,
-		})
-	}
-}
-
-func (b *Balancer) reloadConfig() {
-
-	b.proxyMutex.Lock()
-	err := loadConfig()
-	if err != nil {
-		panic(err)
-	}
-
-	if b.proxies != nil {
-		b.proxies = b.proxies[:0]
-	}
-
-	for _, proxyConf := range config.Proxies {
-		proxy, err := NewProxy(proxyConf.Name, proxyConf.Url)
-		handleErr(err)
-		b.proxies = append(b.proxies, proxy)
-
-		applyConfig(proxy)
-
-		logrus.WithFields(logrus.Fields{
-			"name": proxy.Name,
-			"url":  proxy.Url,
-		}).Info("Proxy")
-	}
-	b.proxyMutex.Unlock()
-
+func (a *Architeuthis) reloadConfig() {
+	_ = loadConfig()
 	logrus.Info("Reloaded config")
 }
 

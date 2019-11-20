@@ -2,465 +2,285 @@ package main
 
 import (
 	"fmt"
-	"github.com/dchest/siphash"
 	"github.com/elazarl/goproxy"
+	"github.com/go-redis/redis"
+	influx "github.com/influxdata/influxdb1-client/v2"
 	"github.com/pkg/errors"
-	"github.com/ryanuber/go-glob"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/time/rate"
-	"math"
-	"math/rand"
+	"html/template"
 	"net/http"
-	"net/url"
-	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
-type Balancer struct {
-	server     *goproxy.ProxyHttpServer
-	proxies    []*Proxy
-	proxyMutex *sync.RWMutex
-}
+func New() *Architeuthis {
 
-type ExpiringLimiter struct {
-	HostGlob  string
-	IsGlob    bool
-	CanDelete bool
-	Limiter   *rate.Limiter
-	LastRead  time.Time
-}
+	a := new(Architeuthis)
 
-type Proxy struct {
-	Name        string
-	Url         *url.URL
-	Limiters    []*ExpiringLimiter
-	HttpClient  *http.Client
-	Connections *int32
-	UniqueParam string
-}
+	a.redis = redis.NewClient(&redis.Options{
+		Addr:     config.RedisUrl,
+		Password: "",
+		DB:       0,
+	})
 
-type RequestCtx struct {
-	RequestTime time.Time
-	Response    *http.Response
-}
+	a.setupProxyReviver()
 
-type ByConnectionCount []*Proxy
+	var err error
+	const InfluxDBUrl = "http://localhost:8086"
+	a.influxdb, err = influx.NewHTTPClient(influx.HTTPConfig{
+		Addr: InfluxDBUrl,
+	})
 
-func (a ByConnectionCount) Len() int {
-	return len(a)
-}
-
-func (a ByConnectionCount) Swap(i, j int) {
-	a[i], a[j] = a[j], a[i]
-}
-
-func (a ByConnectionCount) Less(i, j int) bool {
-	return *a[i].Connections < *a[j].Connections
-}
-
-func (p *Proxy) getLimiter(host string) *rate.Limiter {
-
-	for _, limiter := range p.Limiters {
-		if limiter.IsGlob {
-			if glob.Glob(limiter.HostGlob, host) {
-				limiter.LastRead = time.Now()
-				return limiter.Limiter
-			}
-		} else if limiter.HostGlob == host {
-			limiter.LastRead = time.Now()
-			return limiter.Limiter
-		}
+	_, err = http.Post(InfluxDBUrl+"/query", "application/x-www-form-urlencoded", strings.NewReader("q=CREATE DATABASE \"architeuthis\""))
+	if err != nil {
+		panic(err)
 	}
 
-	newExpiringLimiter := p.makeNewLimiter(host)
-	return newExpiringLimiter.Limiter
-}
+	a.points = make(chan *influx.Point, InfluxDbBufferSize)
 
-func (p *Proxy) makeNewLimiter(host string) *ExpiringLimiter {
+	go a.asyncWriter(a.points)
 
-	newExpiringLimiter := &ExpiringLimiter{
-		CanDelete: false,
-		HostGlob:  host,
-		IsGlob:    false,
-		LastRead:  time.Now(),
-		Limiter:   rate.NewLimiter(rate.Every(config.DefaultConfig.Every), config.DefaultConfig.Burst),
-	}
+	a.server = goproxy.NewProxyHttpServer()
+	a.server.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 
-	p.Limiters = append([]*ExpiringLimiter{newExpiringLimiter}, p.Limiters...)
-
-	logrus.WithFields(logrus.Fields{
-		"host":  host,
-		"every": config.DefaultConfig.Every,
-	}).Trace("New limiter")
-
-	return newExpiringLimiter
-}
-
-func simplifyHost(host string) string {
-
-	col := strings.LastIndex(host, ":")
-	if col > 0 {
-		host = host[:col]
-	}
-
-	return "." + host
-}
-
-func (b *Balancer) chooseProxy(r *http.Request) (*Proxy, error) {
-
-	if len(b.proxies) == 0 {
-		return b.proxies[0], nil
-	}
-
-	if config.Routing {
-		routingProxyParam := r.Header.Get("X-Architeuthis-Proxy")
-		r.Header.Del("X-Architeuthis-Proxy")
-
-		if routingProxyParam != "" {
-			p := b.getProxyByNameOrNil(routingProxyParam)
-			if p != nil {
-				return p, nil
-			}
-		}
-
-		routingHashParam := r.Header.Get("X-Architeuthis-Hash")
-		r.Header.Del("X-Architeuthis-Hash")
-
-		if routingHashParam != "" {
-			hash := siphash.Hash(1, 2, []byte(routingHashParam))
-			if hash == 0 {
-				hash = 1
-			}
-
-			pIdx := int(float64(hash) / (float64(math.MaxUint64) / float64(len(b.proxies))))
-
-			logrus.WithFields(logrus.Fields{
-				"hash": routingHashParam,
-			}).Trace("Using hash")
-
-			return b.proxies[pIdx], nil
-		}
-
-		routingUniqueParam := r.Header.Get("X-Architeuthis-Unique")
-		r.Header.Del("X-Architeuthis-Unique")
-
-		if routingUniqueParam != "" {
-
-			var blankProxy *Proxy
-
-			for _, p := range b.proxies {
-				if p.UniqueParam == "" {
-					blankProxy = p
-				} else if p.UniqueParam == routingUniqueParam {
-					return p, nil
-				}
-			}
-			if blankProxy != nil {
-				blankProxy.UniqueParam = routingUniqueParam
-				logrus.Infof("Bound unique param %s to %s", routingUniqueParam, blankProxy.Name)
-				return blankProxy, nil
-			} else {
-				logrus.WithField("unique param", routingUniqueParam).Error("No blank proxies to route this request!")
-				return nil, errors.Errorf("No blank proxies to route this request! unique param: %s", routingUniqueParam)
-			}
-		}
-	}
-
-	sort.Sort(ByConnectionCount(b.proxies))
-
-	proxyWithLeastConns := b.proxies[0]
-	proxiesWithSameConnCount := b.getProxiesWithSameConnCountAs(proxyWithLeastConns)
-
-	if len(proxiesWithSameConnCount) > 1 {
-		return proxiesWithSameConnCount[rand.Intn(len(proxiesWithSameConnCount))], nil
-	} else {
-		return proxyWithLeastConns, nil
-	}
-}
-
-func (b *Balancer) getProxyByNameOrNil(routingParam string) *Proxy {
-	if routingParam != "" {
-		for _, p := range b.proxies {
-			if p.Name == routingParam {
-				return p
-			}
-		}
-	}
-
-	return nil
-}
-
-func (b *Balancer) getProxiesWithSameConnCountAs(p0 *Proxy) []*Proxy {
-
-	proxiesWithSameConnCount := make([]*Proxy, 0)
-	for _, p := range b.proxies {
-		if *p.Connections != *p0.Connections {
-			break
-		}
-		proxiesWithSameConnCount = append(proxiesWithSameConnCount, p)
-	}
-	return proxiesWithSameConnCount
-}
-
-func New() *Balancer {
-
-	balancer := new(Balancer)
-
-	balancer.proxyMutex = &sync.RWMutex{}
-	balancer.server = goproxy.NewProxyHttpServer()
-
-	balancer.server.OnRequest().HandleConnect(goproxy.AlwaysMitm)
-
-	balancer.server.OnRequest().DoFunc(
+	a.server.OnRequest().DoFunc(
 		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 
-			balancer.proxyMutex.RLock()
-			defer balancer.proxyMutex.RUnlock()
-			p, err := balancer.chooseProxy(r)
-
-			if err != nil {
-				return nil, goproxy.NewResponse(r, "text/plain", 500, err.Error())
-			}
-
-			logrus.WithFields(logrus.Fields{
-				"proxy": p.Name,
-				"conns": *p.Connections,
-				"url":   r.URL,
-			}).Trace("Routing request")
-
-			resp, err := p.processRequest(r)
+			resp, err := a.processRequest(r)
 
 			if err != nil {
 				logrus.WithError(err).Trace("Could not complete request")
-				return nil, goproxy.NewResponse(r, "text/plain", 500, err.Error())
+				return nil, goproxy.NewResponse(r, "text/plain", http.StatusInternalServerError, err.Error())
 			}
 
 			return nil, resp
 		})
 
-	balancer.server.NonproxyHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	a.server.NonproxyHandler = mux
 
-		if r.URL.Path == "/reload" {
-			balancer.reloadConfig()
-			_, _ = fmt.Fprint(w, "Reloaded\n")
-		} else {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, "{\"name\":\"Architeuthis\",\"version\":1.0}")
-		}
+	mux.HandleFunc("/reload", func(w http.ResponseWriter, r *http.Request) {
+		a.reloadConfig()
+		_, _ = fmt.Fprint(w, "Reloaded\n")
 	})
-	return balancer
+
+	templ, _ := template.ParseFiles("templates/stats.html")
+
+	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+		err = templ.Execute(w, a.getStats())
+	})
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, "{\"name\":\"Architeuthis\",\"version\":2.0}")
+	})
+
+	mux.HandleFunc("/add_proxy", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		url := r.URL.Query().Get("url")
+
+		if name == "" || url == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		err := a.AddProxy(name, url)
+		if err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"name": name,
+				"url":  url,
+			}).Error("Could not add proxy")
+
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	return a
 }
 
-func getConfsMatchingRequest(r *http.Request) []*HostConfig {
+func (a *Architeuthis) processRequest(r *http.Request) (*http.Response, error) {
 
-	sHost := simplifyHost(r.Host)
+	sHost := normalizeHost(r.Host)
+	configs := getConfigsMatchingHost(sHost)
 
-	configs := make([]*HostConfig, 0)
+	options := parseOptions(&r.Header)
+	proxyReq := applyHeaders(cloneRequest(r), configs)
 
-	for _, conf := range config.Hosts {
-		if glob.Glob(conf.Host, sHost) {
-			configs = append(configs, conf)
-		}
+	requestCtx := RequestCtx{
+		Request:     proxyReq,
+		Retries:     0,
+		RequestTime: time.Now(),
+		options:     options,
+		configs:     configs,
 	}
 
-	return configs
+	for {
+		responseCtx := a.processRequestWithCtx(&requestCtx)
+
+		a.writeMetricRequest(responseCtx)
+
+		if requestCtx.p != nil {
+			a.UpdateProxy(requestCtx.p)
+		}
+
+		if responseCtx.Error == nil {
+			return responseCtx.Response, nil
+		}
+
+		if !responseCtx.ShouldRetry {
+			return nil, responseCtx.Error
+		}
+	}
 }
 
-func applyHeaders(r *http.Request, configs []*HostConfig) *http.Request {
-
-	for _, conf := range configs {
-		for k, v := range conf.Headers {
-			r.Header.Set(k, v)
-		}
+func (lim *RedisLimiter) waitRateLimit() (time.Duration, error) {
+	result, err := lim.Limiter.Allow(lim.Key)
+	if err != nil {
+		return 0, err
 	}
 
-	return r
+	if result.RetryAfter > 0 {
+		time.Sleep(result.RetryAfter)
+	}
+	return result.RetryAfter, nil
 }
 
-func computeRules(ctx *RequestCtx, configs []*HostConfig) (dontRetry, forceRetry bool,
-	limitMultiplier, newLimit float64, shouldRetry bool) {
-	dontRetry = false
-	forceRetry = false
-	shouldRetry = false
-	limitMultiplier = 1
+func (a *Architeuthis) processRequestWithCtx(rCtx *RequestCtx) ResponseCtx {
 
-	for _, conf := range configs {
-		for _, rule := range conf.Rules {
-			if rule.Matches(ctx) {
-				switch rule.Action {
-				case DontRetry:
-					dontRetry = true
-				case MultiplyEvery:
-					limitMultiplier = rule.Arg
-				case SetEvery:
-					newLimit = rule.Arg
-				case ForceRetry:
-					forceRetry = true
-				case ShouldRetry:
-					shouldRetry = true
-				}
-			}
-		}
+	if !rCtx.LastErrorWasProxyError && rCtx.Retries > config.Retries {
+		return ResponseCtx{Error: errors.Errorf("Giving up after %d retries", rCtx.Retries)}
 	}
+
+	name, err := a.ChooseProxy(rCtx)
+	if err != nil {
+		return ResponseCtx{Error: err}
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"proxy": name,
+		"host":  rCtx.Request.Host,
+	}).Info("Routing request")
+
+	p, err := a.GetProxy(name)
+	if err != nil {
+		return ResponseCtx{Error: err}
+	}
+
+	rCtx.p = p
+	response, err := a.processRequestWithProxy(rCtx)
+
+	responseCtx := ResponseCtx{
+		Response:     response,
+		ResponseTime: time.Now().Sub(rCtx.RequestTime).Seconds(),
+		Error:        err,
+	}
+
+	p.incrReqTime = responseCtx.ResponseTime
+
+	if response != nil && isHttpSuccessCode(response.StatusCode) {
+		p.incrGood += 1
+		return responseCtx
+	}
+
+	rCtx.LastFailedProxy = p.Name
+
+	if isProxyError(err) {
+		a.handleFatalProxyError(p)
+		rCtx.LastErrorWasProxyError = true
+		responseCtx.ShouldRetry = true
+		return responseCtx
+	}
+
+	if err != nil {
+		if isPermanentError(err) {
+			a.handleProxyError(p, &responseCtx)
+			return responseCtx
+		}
+
+		a.waitAfterFail(rCtx)
+		a.handleProxyError(p, &responseCtx)
+		responseCtx.ShouldRetry = true
+	}
+
+	dontRetry, forceRetry, shouldRetry := computeRules(rCtx, responseCtx)
+
+	if forceRetry {
+		responseCtx.ShouldRetry = true
+		return responseCtx
+
+	} else if dontRetry {
+		responseCtx.Error = errors.Errorf("Applied dont_retry rule")
+		return responseCtx
+	}
+
+	if response == nil {
+		return responseCtx
+	}
+
+	// Handle HTTP errors
+	responseCtx.Error = errors.Errorf("HTTP error: %d", response.StatusCode)
+
+	if shouldRetry || shouldRetryHttpCode(response.StatusCode) {
+		responseCtx.ShouldRetry = true
+	}
+
+	return responseCtx
+}
+
+func (a *Architeuthis) waitAfterFail(rCtx *RequestCtx) {
+	wait := getWaitTime(rCtx.Retries)
+	time.Sleep(wait)
+
+	a.writeMetricSleep(wait, "retry")
+
+	rCtx.Retries += 1
+}
+
+func isRemoteProxy(p *Proxy) bool {
+	return p.HttpClient.Transport != nil
+}
+
+func (a *Architeuthis) handleProxyError(p *Proxy, rCtx *ResponseCtx) {
+
+	if isRemoteProxy(p) && shouldBlameProxy(rCtx) {
+		p.incrBad += 1
+		p.BadRequestCount += 1
+	}
+}
+
+func (a *Architeuthis) handleFatalProxyError(p *Proxy) {
+	a.setDead(p.Name)
+}
+
+func (a *Architeuthis) processRequestWithProxy(rCtx *RequestCtx) (r *http.Response, e error) {
+
+	a.incConns(rCtx.p.Name)
+
+	limiter := a.getLimiter(rCtx)
+	duration, err := limiter.waitRateLimit()
+	if err != nil {
+		return nil, err
+	}
+
+	if duration > 0 {
+		a.writeMetricSleep(duration, "rate")
+	}
+
+	r, e = rCtx.p.HttpClient.Do(rCtx.Request)
 
 	return
 }
 
-func (p *Proxy) processRequest(r *http.Request) (*http.Response, error) {
+func (a *Architeuthis) Run() {
 
-	atomic.AddInt32(p.Connections, 1)
-	defer func() {
-		atomic.AddInt32(p.Connections, -1)
-	}()
-	retries := 0
-	additionalRetries := 0
-
-	configs := getConfsMatchingRequest(r)
-	sHost := simplifyHost(r.Host)
-	limiter := p.getLimiter(sHost)
-
-	proxyReq := applyHeaders(cloneRequest(r), configs)
-
-	for {
-		p.waitRateLimit(limiter)
-
-		if retries >= config.Retries+additionalRetries || retries > config.RetriesHard {
-			return nil, errors.Errorf("giving up after %d retries", retries)
-		}
-
-		ctx := &RequestCtx{
-			RequestTime: time.Now(),
-		}
-		var err error
-		ctx.Response, err = p.HttpClient.Do(proxyReq)
-
-		if err != nil {
-			if isPermanentError(err) {
-				return nil, err
-			}
-
-			dontRetry, forceRetry, limitMultiplier, newLimit, _ := computeRules(ctx, configs)
-			if forceRetry {
-				additionalRetries += 1
-			} else if dontRetry {
-				return nil, errors.Errorf("Applied dont_retry rule for (%s)", err)
-			}
-			p.applyLimiterRules(newLimit, limiter, limitMultiplier)
-
-			wait := waitTime(retries)
-			logrus.WithError(err).WithFields(logrus.Fields{
-				"wait": wait,
-			}).Trace("Temporary error during request")
-			time.Sleep(wait)
-
-			retries += 1
-			continue
-		}
-
-		// Compute rules
-		dontRetry, forceRetry, limitMultiplier, newLimit, shouldRetry := computeRules(ctx, configs)
-
-		if forceRetry {
-			additionalRetries += 1
-		} else if dontRetry {
-			return nil, errors.Errorf("Applied dont_retry rule")
-		}
-		p.applyLimiterRules(newLimit, limiter, limitMultiplier)
-
-		if isHttpSuccessCode(ctx.Response.StatusCode) {
-			return ctx.Response, nil
-
-		} else if forceRetry || shouldRetry || shouldRetryHttpCode(ctx.Response.StatusCode) {
-
-			wait := waitTime(retries)
-
-			logrus.WithFields(logrus.Fields{
-				"wait":   wait,
-				"status": ctx.Response.StatusCode,
-			}).Trace("HTTP error during request")
-
-			time.Sleep(wait)
-			retries += 1
-			continue
-		} else {
-			return nil, errors.Errorf("HTTP error: %d", ctx.Response.StatusCode)
-		}
-	}
-}
-
-func (p *Proxy) applyLimiterRules(newLimit float64, limiter *rate.Limiter, limitMultiplier float64) {
-	if newLimit != 0 {
-		limiter.SetLimit(rate.Limit(newLimit))
-	} else if limitMultiplier != 1 {
-		limiter.SetLimit(limiter.Limit() * rate.Limit(1/limitMultiplier))
-	}
-}
-
-func (b *Balancer) Run() {
-
-	//b.Verbose = true
 	logrus.WithFields(logrus.Fields{
 		"addr": config.Addr,
 	}).Info("Listening")
 
-	err := http.ListenAndServe(config.Addr, b.server)
+	err := http.ListenAndServe(config.Addr, a.server)
 	logrus.Fatal(err)
-}
-
-func cloneRequest(r *http.Request) *http.Request {
-
-	proxyReq := &http.Request{
-		Method:     r.Method,
-		URL:        r.URL,
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     r.Header,
-		Body:       r.Body,
-		Host:       r.URL.Host,
-	}
-
-	return proxyReq
-}
-
-func NewProxy(name, stringUrl string) (*Proxy, error) {
-
-	var parsedUrl *url.URL
-	var err error
-	if stringUrl != "" {
-		parsedUrl, err = url.Parse(stringUrl)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		parsedUrl = nil
-	}
-
-	var httpClient *http.Client
-	if parsedUrl == nil {
-		httpClient = &http.Client{}
-	} else {
-		httpClient = &http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(parsedUrl),
-			},
-		}
-	}
-
-	httpClient.Timeout = config.Timeout
-
-	p := &Proxy{
-		Name:       name,
-		Url:        parsedUrl,
-		HttpClient: httpClient,
-	}
-
-	conns := int32(0)
-	p.Connections = &conns
-	return p, nil
 }
 
 func main() {
@@ -469,6 +289,5 @@ func main() {
 	balancer := New()
 	balancer.reloadConfig()
 
-	balancer.setupGarbageCollector()
 	balancer.Run()
 }

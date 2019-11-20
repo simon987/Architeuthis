@@ -6,6 +6,7 @@ remote.identityFile = '/var/lib/jenkins/.ssh/id_rsa'
 remote.knownHosts = '/var/lib/jenkins/.ssh/known_hosts'
 remote.allowAnyHosts = true
 logLevel = 'FINER'
+remote.port = 2299
 
 pipeline {
     agent none

@@ -13,6 +13,33 @@ import (
 	"time"
 )
 
+func shouldBlameProxy(rCtx *ResponseCtx) bool {
+
+	if rCtx.Response != nil {
+		return shouldBlameProxyHttpCode(rCtx.Response.StatusCode)
+	} else {
+		//TODO: don't blame proxy for timeout?
+		return true
+	}
+}
+
+func isProxyError(err error) bool {
+
+	urlErr, ok := err.(*url.Error)
+	if ok {
+		opErr, ok := urlErr.Err.(*net.OpError)
+		if ok {
+			if opErr.Op == "proxyconnect" {
+				return true
+			}
+			if opErr.Op == "local error" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func isPermanentError(err error) bool {
 
 	var opErr *net.OpError
@@ -27,6 +54,11 @@ func isPermanentError(err error) bool {
 			}
 			return false
 		}
+
+		if opErr.Err.Error() == "Internal Privoxy Error" {
+			return true
+		}
+
 	} else {
 		_, ok := err.(net.Error)
 		if ok {
@@ -40,11 +72,6 @@ func isPermanentError(err error) bool {
 		return false
 	}
 
-	if opErr.Op == "proxyconnect" {
-		logrus.Error("Error connecting to the proxy!")
-		return true
-	}
-
 	if opErr.Timeout() {
 		// Usually means that there is no route to host
 		return true
@@ -54,9 +81,6 @@ func isPermanentError(err error) bool {
 	case *net.DNSError:
 		return true
 	case *os.SyscallError:
-
-		logrus.Printf("os.SyscallError:%+v", t)
-
 		if errno, ok := t.Err.(syscall.Errno); ok {
 			switch errno {
 			case syscall.ECONNREFUSED:
@@ -65,36 +89,44 @@ func isPermanentError(err error) bool {
 			case syscall.ETIMEDOUT:
 				log.Println("timeout")
 				return false
+			case syscall.ECONNRESET:
+				log.Println("connection reset by peer")
+				return false
 			}
 		}
 	}
 
-	//todo: handle the other error types
 	fmt.Println("fixme: None of the above")
 
 	return false
 }
 
-func waitTime(retries int) time.Duration {
-
+func getWaitTime(retries int) time.Duration {
 	return time.Duration(config.Wait * int64(math.Pow(config.Multiplier, float64(retries))))
 }
 
 func (p *Proxy) waitRateLimit(limiter *rate.Limiter) {
 
 	reservation := limiter.Reserve()
-
 	delay := reservation.Delay()
+
 	if delay > 0 {
-		logrus.WithFields(logrus.Fields{
-			"wait": delay,
-		}).Trace("Sleeping")
 		time.Sleep(delay)
 	}
 }
 
 func isHttpSuccessCode(code int) bool {
 	return code >= 200 && code < 300
+}
+
+func shouldBlameProxyHttpCode(code int) bool {
+
+	switch {
+	case code >= 500:
+		return false
+	default:
+		return true
+	}
 }
 
 func shouldRetryHttpCode(code int) bool {

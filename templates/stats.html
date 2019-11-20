@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Architeuthis - Stats</title>
+    <style>
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+
+<body>
+
+<table>
+    <thead>
+    <tr>
+        <th>Proxy</th>
+        <th>Url</th>
+        <th>Conns</th>
+        <th>Good</th>
+        <th>Bad</th>
+        <th>Latency</th>
+        <th>Score</th>
+    </tr>
+    </thead>
+    <tbody>
+    {{ range .Proxies}}
+        <tr>
+            <td>{{ .Name}}</td>
+            <td>{{ .Url}}</td>
+            <td>{{ .Connections}}</td>
+            <td>{{ .GoodRequestCount}}</td>
+            <td>{{ .BadRequestCount}}</td>
+            <td>{{ printf "%.2f" .AvgLatency}}</td>
+            <td>{{ .Score}}</td>
+        </tr>
+    {{end}}
+    </tbody>
+    <tfoot>
+    <tr>
+        <td colspan="2">Total</td>
+        <td>{{ .Connections}}</td>
+        <td>{{ .TotalGood}}</td>
+        <td>{{ .TotalBad}}</td>
+        <td>{{ printf "%.2f" .AvgLatency}}</td>
+        <td>{{ printf "%.2f" .AvgScore}}</td>
+    </tr>
+    </tfoot>
+</table>
+
+</body>
+</html>

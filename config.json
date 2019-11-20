@@ -1,47 +1,27 @@
 {
   "addr": "localhost:5050",
   "timeout": "15s",
-  "wait": "4s",
-  "multiplier": 2.5,
+  "wait": "0.5s",
+  "multiplier": 1,
   "retries": 3,
-  "retries_hard": 6,
-  "routing": true,
-  "proxies": [
-    {
-      "name": "p0",
-      "url": ""
-    },
-    {
-      "name": "p1",
-      "url": ""
-    },
-    {
-      "name": "p2",
-      "url": ""
-    },
-    {
-      "name": "p3",
-      "url": ""
-    }
-  ],
+  "max_error": 0.4,
+  "redis_url": "localhost:6379",
   "hosts": [
     {
       "host": "*",
-      "every": "125ms",
-      "burst": 25,
+      "every": "1ms",
+      "burst": 1,
       "headers": {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Cache-Control": "max-age=0",
         "Connection": "keep-alive",
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0"
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:70.0) Gecko/20100101 Firefox/70.0"
       },
       "rules": [
-        {"condition":  "response_time>10s", "action":  "dont_retry"}
       ]
     },
     {
       "host": ".i.imgur.com",
-      "every": "100ms",
+      "every": "1s",
       "burst": 1,
       "headers": {
         "User-Agent": "curl/7.65.1"
@@ -49,7 +29,7 @@
     },
     {
       "host": "*.reddit.com",
-      "every": "2s",
+      "every": "1s",
       "burst": 1
     },
     {
