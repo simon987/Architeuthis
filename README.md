@@ -31,7 +31,7 @@ vim config.json # Configure settings here
 You can add proxies using the `/add_proxy` API:
 
 ```bash
-curl http://localhost:5050?url=<url>&name=<name>
+curl http://localhost:5050/add_proxy?url=<url>&name=<name>
 ```
 
 Or automatically using Proxybroker:
