@@ -289,5 +289,21 @@ func main() {
 	balancer := New()
 	balancer.reloadConfig()
 
+	var err error
+	balancer.influxdb, err = influx.NewHTTPClient(influx.HTTPConfig{
+		Addr:     config.InfluxUrl,
+		Username: config.InfluxUser,
+		Password: config.InfluxPass,
+	})
+
+	_, err = http.Post(config.InfluxUrl+"/query", "application/x-www-form-urlencoded", strings.NewReader("q=CREATE DATABASE \"architeuthis\""))
+	if err != nil {
+		panic(err)
+	}
+
+	balancer.points = make(chan *influx.Point, InfluxDbBufferSize)
+
+	go balancer.asyncWriter(balancer.points)
+
 	balancer.Run()
 }

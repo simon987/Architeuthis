@@ -4,6 +4,9 @@
   "wait": "0.5s",
   "multiplier": 1,
   "retries": 3,
+  "influx_url": "http://localhost:8086",
+  "influx_user": "",
+  "influx_pass": "",
   "max_error": 0.4,
   "redis_url": "localhost:6379",
   "hosts": [

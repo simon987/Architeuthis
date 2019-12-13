@@ -209,4 +209,7 @@ var config struct {
 	Timeout       time.Duration
 	DefaultConfig *HostConfig
 	Routing       bool
+	InfluxUrl     string `json:"influx_url"`
+	InfluxUser    string `json:"influx_user"`
+	InfluxPass    string `json:"influx_pass"`
 }
