@@ -52,7 +52,7 @@ func New() *Architeuthis {
 	templ, _ := template.ParseFiles("templates/stats.html")
 
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
-		err = templ.Execute(w, a.getStats())
+		_ = templ.Execute(w, a.getStats())
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
