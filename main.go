@@ -25,21 +25,6 @@ func New() *Architeuthis {
 
 	a.setupProxyReviver()
 
-	var err error
-	const InfluxDBUrl = "http://localhost:8086"
-	a.influxdb, err = influx.NewHTTPClient(influx.HTTPConfig{
-		Addr: InfluxDBUrl,
-	})
-
-	_, err = http.Post(InfluxDBUrl+"/query", "application/x-www-form-urlencoded", strings.NewReader("q=CREATE DATABASE \"architeuthis\""))
-	if err != nil {
-		panic(err)
-	}
-
-	a.points = make(chan *influx.Point, InfluxDbBufferSize)
-
-	go a.asyncWriter(a.points)
-
 	a.server = goproxy.NewProxyHttpServer()
 	a.server.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 
