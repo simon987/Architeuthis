@@ -35,7 +35,11 @@ func New() *Architeuthis {
 
 			if err != nil {
 				logrus.WithError(err).Trace("Could not complete request")
-				return nil, goproxy.NewResponse(r, "text/plain", http.StatusInternalServerError, err.Error())
+				if resp != nil {
+					return nil, resp
+				} else {
+					return nil, goproxy.NewResponse(r, "text/plain", http.StatusInternalServerError, err.Error())
+				}
 			}
 
 			return nil, resp
@@ -115,7 +119,7 @@ func (a *Architeuthis) processRequest(r *http.Request) (*http.Response, error) {
 		}
 
 		if !responseCtx.ShouldRetry {
-			return nil, responseCtx.Error
+			return responseCtx.Response, responseCtx.Error
 		}
 	}
 }
