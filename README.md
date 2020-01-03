@@ -21,22 +21,21 @@ and error handling. Built for automated web scraping.
 ### Usage
 
 ```bash
-wget https://simon987.net/data/architeuthis/16_architeuthis.tar.gz
-tar -xzf 16_architeuthis.tar.gz
-
+git clone https://github.com/simon987/Architeuthis
 vim config.json # Configure settings here
-./architeuthis
+
+docker-compose up
 ```
 
 You can add proxies using the `/add_proxy` API:
 
 ```bash
-curl http://localhost:5050/add_proxy?url=<url>&name=<name>
+curl http://<Architeuthis IP>:5050/add_proxy?url=<url>&name=<name>
 ```
 
 Or automatically using Proxybroker:
 ```bash
-python3 import_from_broker.py
+python3 import_from_broker.py http://<Architeuthis IP>:5050
 ```
 
 ### Example usage with wget
