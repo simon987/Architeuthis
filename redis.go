@@ -2,8 +2,8 @@ package main
 
 import (
 	"errors"
-	"github.com/go-redis/redis"
-	"github.com/go-redis/redis_rate"
+	"github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis_rate/v8"
 	"github.com/sirupsen/logrus"
 	"math"
 	"math/rand"
@@ -33,12 +33,13 @@ func (a *Architeuthis) getLimiter(rCtx *RequestCtx) *RedisLimiter {
 	}
 
 	return &RedisLimiter{
-		Key: hostConfig.Host + ":" + rCtx.p.Name,
-		Limiter: redis_rate.NewLimiter(a.redis, &redis_rate.Limit{
+		Key:     hostConfig.Host + ":" + rCtx.p.Name,
+		Limiter: redis_rate.NewLimiter(a.redis),
+		Limit: &redis_rate.Limit{
 			Rate:   1,
 			Period: hostConfig.Every,
 			Burst:  hostConfig.Burst,
-		}),
+		},
 	}
 }
 

@@ -2,8 +2,8 @@ package main
 
 import (
 	"github.com/elazarl/goproxy"
-	redisPackage "github.com/go-redis/redis"
-	"github.com/go-redis/redis_rate"
+	redisPackage "github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis_rate/v8"
 	influx "github.com/influxdata/influxdb1-client/v2"
 	"math"
 	"net/http"
@@ -156,6 +156,7 @@ type ProxyJudge struct {
 type RedisLimiter struct {
 	Key     string
 	Limiter *redis_rate.Limiter
+	Limit   *redis_rate.Limit
 }
 
 // Config

@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/elazarl/goproxy"
-	"github.com/go-redis/redis"
+	"github.com/go-redis/redis/v7"
 	influx "github.com/influxdata/influxdb1-client/v2"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -125,7 +125,7 @@ func (a *Architeuthis) processRequest(r *http.Request) (*http.Response, error) {
 }
 
 func (lim *RedisLimiter) waitRateLimit() (time.Duration, error) {
-	result, err := lim.Limiter.Allow(lim.Key)
+	result, err := lim.Limiter.Allow(lim.Key, lim.Limit)
 	if err != nil {
 		return 0, err
 	}
@@ -285,9 +285,11 @@ func main() {
 		Password: config.InfluxPass,
 	})
 
-	_, err = http.Post(config.InfluxUrl+"/query", "application/x-www-form-urlencoded", strings.NewReader("q=CREATE DATABASE \"architeuthis\""))
-	if err != nil {
-		panic(err)
+	if config.InfluxUrl != "" {
+		_, err = http.Post(config.InfluxUrl+"/query", "application/x-www-form-urlencoded", strings.NewReader("q=CREATE DATABASE \"architeuthis\""))
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	balancer.points = make(chan *influx.Point, InfluxDbBufferSize)
