@@ -15,7 +15,7 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 0,
-  "id": 1,
+  "id": null,
   "links": [],
   "panels": [
     {
@@ -774,5 +774,5 @@
   "timezone": "",
   "title": "Architeuthis",
   "uid": "I2xEOnbZk",
-  "version": 11
+  "version": 1
 }

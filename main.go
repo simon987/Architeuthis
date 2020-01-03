@@ -9,13 +9,13 @@ import (
 	"github.com/sirupsen/logrus"
 	"html/template"
 	"net/http"
-	"strings"
 	"time"
 )
 
 func New() *Architeuthis {
 
 	a := new(Architeuthis)
+	a.reloadConfig()
 
 	a.redis = redis.NewClient(&redis.Options{
 		Addr:     config.RedisUrl,
@@ -61,7 +61,7 @@ func New() *Architeuthis {
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, "{\"name\":\"Architeuthis\",\"version\":2.0}")
+		_, _ = fmt.Fprint(w, "{\"name\":\"Architeuthis\",\"version\":2.1}")
 	})
 
 	mux.HandleFunc("/add_proxy", func(w http.ResponseWriter, r *http.Request) {
@@ -276,20 +276,15 @@ func main() {
 	logrus.SetLevel(logrus.TraceLevel)
 
 	balancer := New()
-	balancer.reloadConfig()
 
-	var err error
+	var err error = nil
 	balancer.influxdb, err = influx.NewHTTPClient(influx.HTTPConfig{
 		Addr:     config.InfluxUrl,
 		Username: config.InfluxUser,
 		Password: config.InfluxPass,
 	})
-
-	if config.InfluxUrl != "" {
-		_, err = http.Post(config.InfluxUrl+"/query", "application/x-www-form-urlencoded", strings.NewReader("q=CREATE DATABASE \"architeuthis\""))
-		if err != nil {
-			panic(err)
-		}
+	if err != nil {
+		panic(err)
 	}
 
 	balancer.points = make(chan *influx.Point, InfluxDbBufferSize)

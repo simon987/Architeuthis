@@ -1,0 +1,10 @@
+datasources:
+  - access: 'proxy'
+    editable: true
+    is_default: true
+    name: 'influx'
+    org_id: 1
+    type: 'influxdb'
+    url: 'http://influxdb:8086'
+    database: 'architeuthis'
+    version: 1

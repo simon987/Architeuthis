@@ -1,14 +1,14 @@
 {
-  "addr": "localhost:5050",
+  "addr": "0.0.0.0:5050",
   "timeout": "15s",
   "wait": "0.5s",
   "multiplier": 1,
   "retries": 3,
-  "influx_url": "http://localhost:8086",
+  "influx_url": "http://influxdb:8086",
   "influx_user": "",
   "influx_pass": "",
   "max_error": 0.4,
-  "redis_url": "localhost:6379",
+  "redis_url": "redis:6379",
   "hosts": [
     {
       "host": "*",

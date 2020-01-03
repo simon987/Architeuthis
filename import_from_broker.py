@@ -1,9 +1,14 @@
 import asyncio
+import sys
 
 import requests
 from proxybroker import Broker, Checker
 
-ARCHITEUTHIS_URL = "http://localhost:5050"
+if len(sys.argv) < 2:
+    print("Architeuthis url required")
+    quit(0)
+
+ARCHITEUTHIS_URL = sys.argv[1]
 
 
 def add_to_architeuthis(name, url):

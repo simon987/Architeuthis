@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  architeuthis:
+    build: .
+    ports:
+      - "5050:5050"
+  redis:
+    image: "redis:alpine"
+
+  # (Optional)
+  influxdb:
+    image: "influxdb"
+    environment:
+      - INFLUXDB_DB=architeuthis
+  grafana:
+    build: ./grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=changeme
+
